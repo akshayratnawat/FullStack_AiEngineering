@@ -1,6 +1,14 @@
 # /// script
 # requires-python = ">=3.12"
 # ///
+"""Download recent 10-K annual reports from SEC EDGAR for a fixed set of companies.
+
+Output (under `data/downloads/`):
+  <year>/<ticker>_10-k_<filing_date>_<accession>.<ext>   the raw filing documents
+  manifest.json                                          metadata for every file
+
+Run with: `uv run data/download.py`
+"""
 from __future__ import annotations
 
 import json
@@ -12,22 +20,29 @@ from urllib import request
 
 
 # Params: edit these, then run `uv run data/download.py`
+# SEC requires a User-Agent identifying you (name + email); replace the placeholder.
 USER_AGENT = "Document Copilot your.email@example.com"
-TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL"]
-FILINGS_PER_COMPANY = 5
+TICKERS = ["AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "JPM", "META", "TSLA"]  
+FILINGS_PER_COMPANY = 5  # also the number of past years covered (see target_years)
 OUTPUT_DIR = Path(__file__).resolve().parent / "downloads"
-CLEAR_OUTPUT_DIR = True
+CLEAR_OUTPUT_DIR = True  # wipe previous downloads so each run starts clean
 
+# EDGAR identifies companies by CIK (Central Index Key), not ticker.
+# Every ticker in TICKERS must have an entry here.
 COMPANY_CIKS = {
     "AAPL": "0000320193",
     "MSFT": "0000789019",
     "NVDA": "0001045810",
     "AMZN": "0001018724",
     "GOOGL": "0001652044",
+    "JPM": "0000019617",
+    "META": "0001326801",
+    "TSLA": "0001318605"
 }
 
 
 def get_json(url: str) -> dict:
+    """GET a URL and parse the JSON response (used for EDGAR's submissions API)."""
     req = request.Request(
         url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}
     )
@@ -36,6 +51,7 @@ def get_json(url: str) -> dict:
 
 
 def get_bytes(url: str) -> bytes:
+    """GET a URL and return the raw body (used for the filing documents)."""
     req = request.Request(
         url,
         headers={
@@ -48,10 +64,12 @@ def get_bytes(url: str) -> bytes:
 
 
 def download_filings() -> dict:
+    """Download 10-Ks for every ticker, write manifest.json, and return the manifest."""
     if CLEAR_OUTPUT_DIR and OUTPUT_DIR.exists():
         shutil.rmtree(OUTPUT_DIR)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # The last N completed years (excludes the current, not-yet-filed year).
     target_years = {
         str(year)
         for year in range(
@@ -70,12 +88,15 @@ def download_filings() -> dict:
         print(f"Downloading {ticker} filings...")
         cik = COMPANY_CIKS[ticker]
         submission = get_json(f"https://data.sec.gov/submissions/CIK{cik}.json")
+        # The main response only lists recent filings; older ones live in extra
+        # paginated files referenced under filings.files, so fetch those too.
         submissions = [submission]
         submissions.extend(
             get_json(f"https://data.sec.gov/submissions/{item['name']}")
             for item in submission.get("filings", {}).get("files", [])
         )
 
+        # Collect matching 10-Ks, stopping early once we have enough.
         filings = []
         for sec_submission in submissions:
             filings.extend(extract_10k_filings(sec_submission, target_years))
@@ -83,6 +104,8 @@ def download_filings() -> dict:
                 break
 
         for filing in filings[:FILINGS_PER_COMPANY]:
+            # EDGAR archive URLs use the accession number without dashes and the
+            # CIK without leading zeros.
             accession_path = filing["accession_number"].replace("-", "")
             source_url = (
                 "https://www.sec.gov/Archives/edgar/data/"
@@ -112,6 +135,7 @@ def download_filings() -> dict:
             )
             manifest["downloaded_count"] += 1
 
+            # Stay well under SEC's rate limit (10 requests/second).
             time.sleep(0.2)
 
     manifest_path = OUTPUT_DIR / "manifest.json"
@@ -122,6 +146,11 @@ def download_filings() -> dict:
 def extract_10k_filings(
     submission: dict, target_years: set[str]
 ) -> list[dict[str, str]]:
+    """Return the 10-K entries in one submissions payload that fall in target_years.
+
+    The payload is column-oriented (parallel lists per field). The main response
+    nests them under filings.recent; the older-history files have them at top level.
+    """
     recent = submission["filings"]["recent"] if "filings" in submission else submission
     filings = []
 
@@ -133,6 +162,7 @@ def extract_10k_filings(
         recent["reportDate"],
         strict=True,
     ):
+        # Bucket by fiscal period end (report_date); fall back to filing date if missing.
         year = (report_date or filing_date)[:4]
         if form == "10-K" and year in target_years:
             filings.append(

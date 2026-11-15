@@ -25,6 +25,13 @@ def get_url() -> str:
     return url.replace("postgresql://", "postgresql+psycopg://", 1)
 
 
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    # users.id -> auth.users.id exists only in the migration (the `auth` schema belongs
+    # to Supabase, so our models can't describe it). Without this, autogenerate would
+    # see a foreign key in the database that the models lack and propose dropping it.
+    return not (type_ == "foreign_key_constraint" and name == "fk_users_id_users")
+
+
 def run_migrations_offline() -> None:
     """Print the SQL instead of running it (no database connection)."""
     context.configure(
@@ -33,6 +40,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -46,6 +54,7 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,  # also notice when a column's type changes
+            include_object=include_object,
         )
         with context.begin_transaction():
             context.run_migrations()

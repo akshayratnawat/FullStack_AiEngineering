@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 
+import PasswordInput from '@/components/auth/PasswordInput'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -36,6 +37,9 @@ const COPY = {
 export default function AuthForm({ mode }: { mode: Mode }) {
   const copy = COPY[mode]
   const navigate = useNavigate()
+  // ProtectedRoute leaves the page the user was heading to in the navigation state.
+  const location = useLocation()
+  const destination = (location.state as { from?: { pathname: string } } | null)?.from?.pathname ?? '/'
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -53,12 +57,12 @@ export default function AuthForm({ mode }: { mode: Mode }) {
     if (mode === 'login') {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) setError(error.message)
-      else navigate('/')
+      else navigate(destination, { replace: true })
     } else {
       const { data, error } = await supabase.auth.signUp({ email, password })
       if (error) setError(error.message)
       // With email confirmation on, there is no session until the user clicks the link.
-      else if (data.session) navigate('/')
+      else if (data.session) navigate(destination, { replace: true })
       else setNotice('Check your email to confirm your account, then sign in.')
     }
 
@@ -80,10 +84,9 @@ export default function AuthForm({ mode }: { mode: Mode }) {
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="password">Password</Label>
-              <Input
+              <PasswordInput
                 id="password"
                 name="password"
-                type="password"
                 autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
                 minLength={8}
                 required

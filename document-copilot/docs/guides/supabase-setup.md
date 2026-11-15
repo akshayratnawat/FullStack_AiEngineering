@@ -19,16 +19,63 @@ We use Supabase for **Postgres** (users, chats, source documents, chunks, embedd
 
 ## 3. Collect credentials
 
-You need these values in backend and frontend env config (exact variable names will live in each service's settings module once the app is built).
+You need these values in backend and frontend env config. Copy `backend/.env.example` to `backend/.env` and `frontend/.env.example` to `frontend/.env`, then paste the values in. `.env` files are gitignored; never put real values in `.env.example`.
 
-| Value | Where to find it | Used by |
-| ----- | ---------------- | ------- |
-| **Project URL** | Dashboard → **Project Settings** → **API** → Project URL | Frontend + backend |
-| **anon (public) key** | Same page → `anon` `public` key | Frontend (browser-safe) |
-| **service_role (secret) key** | Same page → `service_role` `secret` key | Backend only — never expose to the browser |
-| **Project ref** | Dashboard URL `supabase.com/dashboard/project/<ref>` or `supabase projects list` | CLI commands |
-| **Direct database connection string** | Dashboard → **Project Settings** → **Database** → Connection string | Alembic migrations and backend DB access |
-| **Database password** | What you set at project creation | Direct Postgres connection |
+**Start here: open your project and click the `Connect` button in the top bar.** The Connect panel shows the project URL, the API keys and the database connection strings in one place, so you rarely need to hunt through Project Settings. (The older paths under **Project Settings** still work and are listed in the table as a fallback.)
+
+Supabase renamed its keys in the newer dashboard. Old docs and our `.env.example` variable names still say "anon" and "service_role"; the new names map onto the same variables:
+
+| Value | Where to find it | Looks like | Goes in |
+| ----- | ---------------- | ---------- | ------- |
+| **Project URL** | **Connect** panel, or **Project Settings** → **API** (may be labelled **Data API**) → "API URL" box. **Remove the trailing `/rest/v1/`.** | `https://<project-ref>.supabase.co` | `SUPABASE_URL` (backend), `VITE_SUPABASE_URL` (frontend) |
+| **Publishable key** (formerly *anon / public*) | **Connect** panel, or **Project Settings** → **API Keys** → **Publishable key** → `default` | `sb_publishable_...` | `SUPABASE_ANON_KEY` (backend), `VITE_SUPABASE_ANON_KEY` (frontend) |
+| **Secret key** (formerly *service_role*) | **Project Settings** → **API Keys** → **Secret keys** → `default` (click the eye icon to reveal) | `sb_secret_...` | `SUPABASE_SERVICE_ROLE_KEY` (**backend only**) |
+| **Database connection string** | **Connect** panel → connection string / **URI** (see "Which connection string" below), or **Project Settings** → **Database** | see below | `DATABASE_URL` (backend) |
+| **Database password** | What you set at project creation. The connection string shows `[YOUR-PASSWORD]` as a placeholder; reset the password under **Project Settings** → **Database** if lost. | — | Inside `DATABASE_URL`; URL-encode special characters (`@` → `%40`, `#` → `%23`) |
+| **Project ref** | The first part of the Project URL, or the dashboard URL `supabase.com/dashboard/project/<ref>` | `abcdefghijklmnop` | CLI commands |
+
+### Which connection string to use
+
+The Connect panel offers three database connection options:
+
+| Option | Host / port | Use for |
+| ------ | ----------- | ------- |
+| **Direct connection** | `db.<ref>.supabase.co:5432` | Preferred for Alembic migrations. On the free plan it is often **IPv6-only**, so it can fail on networks without IPv6 (common on home / Windows setups). |
+| **Session pooler** | `aws-0-<region>.pooler.supabase.com:5432`, user `postgres.<ref>` | Fallback if Direct fails. Works over IPv4 and supports migrations. |
+| **Transaction pooler** | `...pooler.supabase.com:6543` | **Do not use for migrations** (no session-level features). |
+
+Try **Direct** first; if you get a connection error, switch `DATABASE_URL` to the **Session pooler** string.
+
+### Which key is safe where
+
+- **Publishable key** — safe in the browser (it is bundled into the frontend), because Row Level Security limits what it can do.
+- **Secret key** — bypasses all access rules. Backend only. Never put it in git, the frontend, `.env.example`, screenshots or chat. If it leaks, rotate it in the dashboard.
+- Only variables prefixed `VITE_` reach the browser, so keep secrets in `backend/.env` and never give them a `VITE_` prefix.
+
+### Step by step
+
+1. Open your project and click **Connect** in the top bar.
+2. Copy the **Project URL** (no `/rest/v1/` on the end) and the **Publishable key**.
+3. Pick a database connection string: **Direct** first, **Session pooler** if Direct fails. Replace `[YOUR-PASSWORD]` with your database password (URL-encoded).
+4. Go to **Project Settings** → **API Keys** and reveal the **Secret key**.
+5. Create the two `.env` files and paste the values in as shown below. Do this yourself in your editor; don't paste secrets into chat tools or commits.
+
+`backend/.env` (can hold everything, including secrets):
+
+```env
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_ANON_KEY=sb_publishable_...
+SUPABASE_SERVICE_ROLE_KEY=sb_secret_...
+DATABASE_URL=postgresql://postgres:<url-encoded-password>@db.<project-ref>.supabase.co:5432/postgres
+```
+
+`frontend/.env` (public values only; this file is bundled into the browser):
+
+```env
+VITE_API_BASE_URL=http://localhost:8000
+VITE_SUPABASE_URL=https://<project-ref>.supabase.co
+VITE_SUPABASE_ANON_KEY=sb_publishable_...
+```
 
 From the CLI you can also print API keys:
 
@@ -36,7 +83,7 @@ From the CLI you can also print API keys:
 supabase projects api-keys --project-ref <your-project-ref>
 ```
 
-Keep `service_role` out of git, client bundles, and frontend env files.
+> If a key is rejected as invalid later, check that the installed `supabase` Python / `@supabase/supabase-js` version supports the new `sb_publishable_` / `sb_secret_` key format.
 
 ## 4. Auth settings (email only)
 

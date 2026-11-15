@@ -2,8 +2,41 @@
 name = "document-copilot-backend"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "alembic==1.20.1",
+    "fastapi==0.162.2",
+    "httpx==0.28.1",
+    "openai==3.46.0",
+    "pgvector==0.5.1",
+    "psycopg[binary]==3.3.8",
+    "pydantic==2.14.3",
+    "pydantic-ai==2.66.0",
+    "pydantic-settings==2.16.2",
+    "sqlalchemy==2.1.8",
+    "structlog==26.1.0",
+    "supabase==2.34.1",
+    "uvicorn==0.54.0",
+]
+
+# Build settings: they make uv install our own `app/` folder into the virtual
+# environment as a package, so `from app...` imports work from any folder
+# (notebooks, tests, editor run buttons), not just from backend/.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# Which folder to package; hatchling can't guess it from the project name.
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
 
 [tool.uv]
 add-bounds = "exact"
 exclude-newer = "7 days"
+
+[dependency-groups]
+dev = [
+    "ipykernel==7.4.0",
+    "pytest==9.2.0",
+    "ruff==0.17.4",
+]

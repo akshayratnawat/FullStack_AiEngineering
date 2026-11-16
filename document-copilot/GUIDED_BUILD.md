@@ -714,6 +714,103 @@ cd ~                         # go somewhere unrelated
 
 ---
 
+## Part 3 — The chat shell (backend)
+
+### Step 7 — Threads, a streaming endpoint with a stubbed reply, and saving
+
+**Goal.** Four routes, all behind sign-in: list threads, create a thread, load a thread's messages, and `POST /chat/stream`, which streams a canned assistant reply and saves the exchange when it ends. Another user's thread gives `403`.
+
+**Why.** This is the vertical slice every later phase plugs into. Retrieval and the real agent will replace only the stub; the stream format, ownership checks and saving stay as built here. Doing it with a fake reply first means the chat UI can be built and tested before any LLM cost or retrieval bug is involved.
+
+**Prompt the AI.**
+
+> Add the chat backend for Phase 3. Routes: `GET /threads`, `POST /threads`, `GET /threads/{id}/messages`, `POST /chat/stream` (body `{threadId, messages}` in AI SDK UI-message format; stream the AI SDK UI message stream over SSE). Use `get_current_user` on every route. Use the user-scoped Supabase client for normal reads and writes so RLS applies; use the service client only to find a thread's owner (return 404 if missing, 403 if it is someone else's) and to create the `users` row. The assistant is a stub that streams a canned reply word by word. Save the user message and assistant message in one insert after the last text chunk and before `finish`; if saving fails, send an error event instead of `finish`. Name a new thread from the first 60 characters of its first question. Keep the files small: `database/chats.py`, `chat/messages.py`, `chat/streaming.py`, `chat/orchestrator.py`, `api/chat.py`. Add unit tests with an in-memory fake store; no network or database.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/chats.py` | `ChatStore`: every chat read/write, plus the ownership lookup |
+| `app/chat/messages.py` | AI SDK message ↔ stored row conversion; pulls the new question out of the request |
+| `app/chat/streaming.py` | Writes the SSE events: `start`, `text-start`, `text-delta`…, `text-end`, `finish`, `[DONE]` |
+| `app/chat/orchestrator.py` | One turn: the stub reply, then saving |
+| `app/api/chat.py` | The four routes and the 403/404 check |
+| `app/main.py` | Registers the router; creates the service client once at startup |
+
+The key idea in `api/chat.py`: everything that can fail with a real HTTP status (401, 403, 404, 422) is checked **before** the `StreamingResponse` is returned. Once streaming starts the status is already `200`, so later failures can only be sent as an error event.
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -q          # 34 passed
+uv run ruff check app tests
+uv run uvicorn app.main:app --port 8000
+curl -i localhost:8000/threads                                 # 401 "Missing bearer token."
+curl -i -H "Authorization: Bearer nope" localhost:8000/threads # 401 "Invalid or expired token."
+```
+
+Not yet verified live: a real signed-in call (`POST /threads`, then `/chat/stream`) against Supabase. That needs a real account's token and is the first thing to try when the chat UI exists.
+
+**Check your understanding.**
+
+- *Why not just use the user-scoped client for the 403 check?* RLS hides other people's rows, so a thread owned by someone else looks exactly like one that does not exist, and you would return 404. The service client can see who owns it.
+- *Why save after streaming instead of before or during?* A dropped connection must not leave half an answer in the database. Saving before `finish` (not after `[DONE]`) lets a failed save surface as an error event.
+- *Why does the server keep only the last message from the request?* The SDK resends the whole conversation each time, but earlier messages are already stored, and the stored copy is the one to trust.
+- *Why do we create the `users` row ourselves?* Nothing does it at sign-up, `chat_threads` has a foreign key to it, and signed-in users can only read that table, so the service client creates it on the first thread.
+
+**Common mistakes.**
+
+- **Assuming the models' defaults apply.** The id (`uuid4`) and `updated_at` (`onupdate`) defaults live in the SQLAlchemy models, but this code writes through the Supabase API, which bypasses them. Without an explicit id the insert fails, and `updated_at` never changes.
+- **Saving both messages in one statement without timestamps.** Both rows get the same database `now()`, so their order is undefined. Set `created_at` explicitly: question first, answer after.
+- **Testing a server on `localhost`.** If another process already listens on that port on IPv6, `curl localhost:PORT` talks to it instead of uvicorn. Use `127.0.0.1` and a fresh port.
+- **Hand-writing the SSE event names from memory.** They differ between AI SDK major versions; re-check them against the installed `ai` package when the frontend chat is added.
+
+### Step 8 — The chat UI (frontend)
+
+**Goal.** A sidebar of past conversations, a "New chat" button, and a chat screen that streams the stub reply and shows saved history after a reload, all behind the sign-in guard.
+
+**Why.** It is the screen every later phase fills in: retrieval, citations and source passages all render inside this message list.
+
+**Prompt the AI.**
+
+> Build the Phase 3 chat UI. Install `ai` and `@ai-sdk/react` and **read their installed type definitions before writing code** (the API changes between major versions). Routes inside `ProtectedRoute`: `/` (empty state) and `/chat/:threadId`, sharing a layout with a sidebar. Sidebar: thread list (title or "New chat"), New chat button (creates the thread through `POST /threads`, then opens it), email and sign out. Chat screen: load stored messages from `GET /threads/:id/messages`, then `useChat` with a `DefaultChatTransport` pointed at `${VITE_API_BASE_URL}/chat/stream` with the Supabase bearer token and `body: { threadId }`. Show "Thinking…" while waiting, a cursor while streaming, a Stop button, and readable errors for 401/403/404 and network failures. No test runner; verify with `tsc`, lint and build.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `src/lib/chat.ts` | Thread calls through `api`, the stream transport (it cannot use `api`: the SDK makes its own request), and `describeError` |
+| `src/components/chat/ChatLayout.tsx` | Layout route; owns the thread list and refreshes it after each reply |
+| `src/components/chat/ThreadSidebar.tsx` | List, New chat, email, sign out |
+| `src/components/chat/ChatThread.tsx` | Loads history, shows loading/403/404 states |
+| `src/components/chat/ChatSession.tsx` | `useChat` itself, one per thread (`key={threadId}`) |
+| `src/components/chat/MessageList.tsx`, `MessageInput.tsx` | Display with auto-scroll; Enter sends, Shift+Enter is a new line |
+| `src/pages/ChatHomePage.tsx`, `ChatThreadPage.tsx` | Route-level pages |
+
+**Verify.**
+
+```bash
+cd frontend
+pnpm tsc --noEmit && pnpm lint && pnpm build
+```
+
+The real check is manual, signed in: New chat → send a message → watch the reply stream → reload → the conversation is still there, and the sidebar title is your first question. Before that, the wire format was checked by running the real SDK `Chat` class in Node against the real FastAPI routes (fake user and store): status went `submitted → streaming → ready` with no error and the reply assembled correctly.
+
+**Check your understanding.**
+
+- *Why can't the stream use `api.post`?* `api` waits for a whole JSON response; the SDK needs to read the response as it arrives, so it does its own `fetch`. It reuses `getAccessToken` for the same token.
+- *Why `key={threadId}` on the chat?* `useChat` keeps its state per mounted component. A new key throws the old state away, so one thread's messages never leak into another.
+- *Why load history before mounting `useChat`?* The hook takes its starting messages once. Mounting it before the history arrives would start the chat empty.
+
+**Common mistakes.**
+
+- **Writing SDK code from memory.** The installed packages were `ai` 7 and `@ai-sdk/react` 4, newer than most tutorials. Reading the `.d.ts` files first took minutes and avoided guessing event names.
+- **Testing on `localhost` against a server bound to `127.0.0.1`** (or the reverse). Pin the host (`--host 127.0.0.1`) and use that address in the URL.
+- **Calling a state-setting function from `useEffect`.** The linter flags it; do the fetch inside the effect with a `cancelled` flag so leaving the page cancels it.
+
+---
+
 ## Roadmap
 
 Steps still to be written into this guide, in build order (from [docs/architecture.md](docs/architecture.md)):
@@ -730,8 +827,8 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 3 | First migration (pgvector, documents, chunks, chats, citations) | Planned |
 | 4 | Supabase Auth in the frontend + token verification in FastAPI | Planned |
 | 5 | Shared frontend API client | Planned |
-| 6 | Chat endpoint with a stubbed reply | Planned |
-| 7 | Chat UI | Planned |
+| 6 | Chat endpoint with a stubbed reply | **Written (Part 3, Step 7)** |
+| 7 | Chat UI | **Written (Part 3, Step 8)** |
 | 8 | Ingestion: Markdown, chunking, embeddings | Planned |
 | 9 | Semantic search (pgvector) | Planned |
 | 10 | Keyword search + Reciprocal Rank Fusion | Planned |

@@ -8,13 +8,18 @@ Run from the backend folder, where docling is installed (dev group):
     uv run python ../data/convert_to_markdown.py            # convert everything
     uv run python ../data/convert_to_markdown.py --limit 1  # try one file first
 
+Also writes data/markdown/manifest.json: the same metadata as
+data/downloads/manifest.json, with local_path pointing at the .md file.
+
 Files that already have a .md are skipped, so the script can be re-run safely.
 Use --force to convert them again.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from docling.document_converter import DocumentConverter
@@ -23,6 +28,39 @@ DATA_DIR = Path(__file__).resolve().parent
 INPUT_DIR = DATA_DIR / "downloads"
 OUTPUT_DIR = DATA_DIR / "markdown"
 HTML_SUFFIXES = {".htm", ".html"}
+
+
+def write_manifest() -> int:
+    """Write markdown/manifest.json for every filing that has a converted .md file."""
+    # Rebuilt from the downloads manifest on every run (not only for newly converted
+    # files), so skipped files stay listed and the metadata never drifts from the source.
+    downloads = json.loads((INPUT_DIR / "manifest.json").read_text(encoding="utf-8"))
+    filings = []
+    for filing in downloads["filings"]:
+        source_path = Path(filing["local_path"])
+        target = OUTPUT_DIR / source_path.with_suffix(".md")
+        if not target.exists():
+            continue
+        filings.append(
+            {
+                **{key: value for key, value in filing.items() if key != "local_path"},
+                "source_path": source_path.as_posix(),
+                "local_path": target.relative_to(OUTPUT_DIR).as_posix(),
+                "characters": len(target.read_text(encoding="utf-8")),
+            }
+        )
+    manifest = {
+        "source": downloads["source"],
+        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "form": downloads["form"],
+        "converted_with": "docling",
+        "converted_count": len(filings),
+        "filings": filings,
+    }
+    (OUTPUT_DIR / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    return len(filings)
 
 
 def main() -> None:
@@ -62,7 +100,9 @@ def main() -> None:
         done += 1
         print(f"{label}: {len(markdown):,} chars in {time.perf_counter() - started:.1f}s")
 
-    print(f"\nConverted {done}, skipped {skipped}, failed {len(failed)}.")
+    count = write_manifest()
+    print(f"\nManifest: {OUTPUT_DIR / 'manifest.json'} ({count} filings)")
+    print(f"Converted {done}, skipped {skipped}, failed {len(failed)}.")
     for source, message in failed:
         print(f"  FAILED {source.relative_to(INPUT_DIR).as_posix()}: {message}")
 

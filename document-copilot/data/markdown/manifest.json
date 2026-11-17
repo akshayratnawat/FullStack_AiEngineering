@@ -1,6 +1,6 @@
 {
   "source": "SEC EDGAR",
-  "generated_at_utc": "2026-11-17T14:17:50.439038+00:00",
+  "generated_at_utc": "2026-11-17T16:20:22.874834+00:00",
   "form": "10-K",
   "converted_with": "docling",
   "converted_count": 40,
@@ -16,7 +16,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm",
       "source_path": "2025/aapl_10-k_2025-10-31_0000320193-25-000079.htm",
       "local_path": "2025/aapl_10-k_2025-10-31_0000320193-25-000079.md",
-      "characters": 607092
+      "characters": 259108
     },
     {
       "ticker": "AAPL",
@@ -29,7 +29,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019324000123/aapl-20240928.htm",
       "source_path": "2024/aapl_10-k_2024-11-01_0000320193-24-000123.htm",
       "local_path": "2024/aapl_10-k_2024-11-01_0000320193-24-000123.md",
-      "characters": 611690
+      "characters": 257671
     },
     {
       "ticker": "AAPL",
@@ -42,7 +42,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019323000106/aapl-20230930.htm",
       "source_path": "2023/aapl_10-k_2023-11-03_0000320193-23-000106.htm",
       "local_path": "2023/aapl_10-k_2023-11-03_0000320193-23-000106.md",
-      "characters": 613981
+      "characters": 255269
     },
     {
       "ticker": "AAPL",
@@ -55,7 +55,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019322000108/aapl-20220924.htm",
       "source_path": "2022/aapl_10-k_2022-10-28_0000320193-22-000108.htm",
       "local_path": "2022/aapl_10-k_2022-10-28_0000320193-22-000108.md",
-      "characters": 608229
+      "characters": 268830
     },
     {
       "ticker": "AAPL",
@@ -68,7 +68,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/320193/000032019321000105/aapl-20210925.htm",
       "source_path": "2021/aapl_10-k_2021-10-29_0000320193-21-000105.htm",
       "local_path": "2021/aapl_10-k_2021-10-29_0000320193-21-000105.md",
-      "characters": 609164
+      "characters": 275016
     },
     {
       "ticker": "MSFT",
@@ -81,7 +81,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017025100235/msft-20250630.htm",
       "source_path": "2025/msft_10-k_2025-07-30_0000950170-25-100235.htm",
       "local_path": "2025/msft_10-k_2025-07-30_0000950170-25-100235.md",
-      "characters": 663973
+      "characters": 382110
     },
     {
       "ticker": "MSFT",
@@ -94,7 +94,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm",
       "source_path": "2024/msft_10-k_2024-07-30_0000950170-24-087843.htm",
       "local_path": "2024/msft_10-k_2024-07-30_0000950170-24-087843.md",
-      "characters": 742981
+      "characters": 424759
     },
     {
       "ticker": "MSFT",
@@ -107,7 +107,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000095017023035122/msft-20230630.htm",
       "source_path": "2023/msft_10-k_2023-07-27_0000950170-23-035122.htm",
       "local_path": "2023/msft_10-k_2023-07-27_0000950170-23-035122.md",
-      "characters": 713475
+      "characters": 405977
     },
     {
       "ticker": "MSFT",
@@ -120,7 +120,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000156459022026876/msft-10k_20220630.htm",
       "source_path": "2022/msft_10-k_2022-07-28_0001564590-22-026876.htm",
       "local_path": "2022/msft_10-k_2022-07-28_0001564590-22-026876.md",
-      "characters": 741168
+      "characters": 444195
     },
     {
       "ticker": "MSFT",
@@ -133,7 +133,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/789019/000156459021039151/msft-10k_20210630.htm",
       "source_path": "2021/msft_10-k_2021-07-29_0001564590-21-039151.htm",
       "local_path": "2021/msft_10-k_2021-07-29_0001564590-21-039151.md",
-      "characters": 742763
+      "characters": 442408
     },
     {
       "ticker": "NVDA",
@@ -146,7 +146,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581025000023/nvda-20250126.htm",
       "source_path": "2025/nvda_10-k_2025-02-26_0001045810-25-000023.htm",
       "local_path": "2025/nvda_10-k_2025-02-26_0001045810-25-000023.md",
-      "characters": 934569
+      "characters": 406493
     },
     {
       "ticker": "NVDA",
@@ -159,7 +159,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581024000029/nvda-20240128.htm",
       "source_path": "2024/nvda_10-k_2024-02-21_0001045810-24-000029.htm",
       "local_path": "2024/nvda_10-k_2024-02-21_0001045810-24-000029.md",
-      "characters": 1013602
+      "characters": 397675
     },
     {
       "ticker": "NVDA",
@@ -172,7 +172,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581023000017/nvda-20230129.htm",
       "source_path": "2023/nvda_10-k_2023-02-24_0001045810-23-000017.htm",
       "local_path": "2023/nvda_10-k_2023-02-24_0001045810-23-000017.md",
-      "characters": 1069757
+      "characters": 383124
     },
     {
       "ticker": "NVDA",
@@ -185,7 +185,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581022000036/nvda-20220130.htm",
       "source_path": "2022/nvda_10-k_2022-03-18_0001045810-22-000036.htm",
       "local_path": "2022/nvda_10-k_2022-03-18_0001045810-22-000036.md",
-      "characters": 939376
+      "characters": 364870
     },
     {
       "ticker": "NVDA",
@@ -198,7 +198,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1045810/000104581021000010/nvda-20210131.htm",
       "source_path": "2021/nvda_10-k_2021-02-26_0001045810-21-000010.htm",
       "local_path": "2021/nvda_10-k_2021-02-26_0001045810-21-000010.md",
-      "characters": 902961
+      "characters": 363648
     },
     {
       "ticker": "AMZN",
@@ -211,7 +211,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872426000004/amzn-20251231.htm",
       "source_path": "2025/amzn_10-k_2026-02-06_0001018724-26-000004.htm",
       "local_path": "2025/amzn_10-k_2026-02-06_0001018724-26-000004.md",
-      "characters": 862195
+      "characters": 346296
     },
     {
       "ticker": "AMZN",
@@ -224,7 +224,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872425000004/amzn-20241231.htm",
       "source_path": "2024/amzn_10-k_2025-02-07_0001018724-25-000004.htm",
       "local_path": "2024/amzn_10-k_2025-02-07_0001018724-25-000004.md",
-      "characters": 834829
+      "characters": 343133
     },
     {
       "ticker": "AMZN",
@@ -237,7 +237,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872424000008/amzn-20231231.htm",
       "source_path": "2023/amzn_10-k_2024-02-02_0001018724-24-000008.htm",
       "local_path": "2023/amzn_10-k_2024-02-02_0001018724-24-000008.md",
-      "characters": 838153
+      "characters": 347026
     },
     {
       "ticker": "AMZN",
@@ -250,7 +250,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872423000004/amzn-20221231.htm",
       "source_path": "2022/amzn_10-k_2023-02-03_0001018724-23-000004.htm",
       "local_path": "2022/amzn_10-k_2023-02-03_0001018724-23-000004.md",
-      "characters": 815438
+      "characters": 331912
     },
     {
       "ticker": "AMZN",
@@ -263,7 +263,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1018724/000101872422000005/amzn-20211231.htm",
       "source_path": "2021/amzn_10-k_2022-02-04_0001018724-22-000005.htm",
       "local_path": "2021/amzn_10-k_2022-02-04_0001018724-22-000005.md",
-      "characters": 768243
+      "characters": 313787
     },
     {
       "ticker": "GOOGL",
@@ -276,7 +276,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204426000018/goog-20251231.htm",
       "source_path": "2025/googl_10-k_2026-02-05_0001652044-26-000018.htm",
       "local_path": "2025/googl_10-k_2026-02-05_0001652044-26-000018.md",
-      "characters": 1191907
+      "characters": 440977
     },
     {
       "ticker": "GOOGL",
@@ -289,7 +289,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204425000014/goog-20241231.htm",
       "source_path": "2024/googl_10-k_2025-02-05_0001652044-25-000014.htm",
       "local_path": "2024/googl_10-k_2025-02-05_0001652044-25-000014.md",
-      "characters": 1174733
+      "characters": 445428
     },
     {
       "ticker": "GOOGL",
@@ -302,7 +302,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204424000022/goog-20231231.htm",
       "source_path": "2023/googl_10-k_2024-01-31_0001652044-24-000022.htm",
       "local_path": "2023/googl_10-k_2024-01-31_0001652044-24-000022.md",
-      "characters": 1151266
+      "characters": 435121
     },
     {
       "ticker": "GOOGL",
@@ -315,7 +315,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204423000016/goog-20221231.htm",
       "source_path": "2022/googl_10-k_2023-02-03_0001652044-23-000016.htm",
       "local_path": "2022/googl_10-k_2023-02-03_0001652044-23-000016.md",
-      "characters": 1145422
+      "characters": 414557
     },
     {
       "ticker": "GOOGL",
@@ -328,7 +328,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1652044/000165204422000019/goog-20211231.htm",
       "source_path": "2021/googl_10-k_2022-02-02_0001652044-22-000019.htm",
       "local_path": "2021/googl_10-k_2022-02-02_0001652044-22-000019.md",
-      "characters": 1191676
+      "characters": 432121
     },
     {
       "ticker": "JPM",
@@ -341,7 +341,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000162828026008131/jpm-20251231.htm",
       "source_path": "2025/jpm_10-k_2026-02-13_0001628280-26-008131.htm",
       "local_path": "2025/jpm_10-k_2026-02-13_0001628280-26-008131.md",
-      "characters": 5441964
+      "characters": 1811306
     },
     {
       "ticker": "JPM",
@@ -354,7 +354,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961725000270/jpm-20241231.htm",
       "source_path": "2024/jpm_10-k_2025-02-14_0000019617-25-000270.htm",
       "local_path": "2024/jpm_10-k_2025-02-14_0000019617-25-000270.md",
-      "characters": 5442524
+      "characters": 1839339
     },
     {
       "ticker": "JPM",
@@ -367,7 +367,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961724000225/jpm-20231231.htm",
       "source_path": "2023/jpm_10-k_2024-02-16_0000019617-24-000225.htm",
       "local_path": "2023/jpm_10-k_2024-02-16_0000019617-24-000225.md",
-      "characters": 5639244
+      "characters": 1864589
     },
     {
       "ticker": "JPM",
@@ -380,7 +380,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961723000231/jpm-20221231.htm",
       "source_path": "2022/jpm_10-k_2023-02-21_0000019617-23-000231.htm",
       "local_path": "2022/jpm_10-k_2023-02-21_0000019617-23-000231.md",
-      "characters": 5370408
+      "characters": 1760026
     },
     {
       "ticker": "JPM",
@@ -393,7 +393,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/19617/000001961722000272/jpm-20211231.htm",
       "source_path": "2021/jpm_10-k_2022-02-22_0000019617-22-000272.htm",
       "local_path": "2021/jpm_10-k_2022-02-22_0000019617-22-000272.md",
-      "characters": 5669485
+      "characters": 1765122
     },
     {
       "ticker": "META",
@@ -406,7 +406,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1326801/000162828026003942/meta-20251231.htm",
       "source_path": "2025/meta_10-k_2026-01-29_0001628280-26-003942.htm",
       "local_path": "2025/meta_10-k_2026-01-29_0001628280-26-003942.md",
-      "characters": 1155572
+      "characters": 590693
     },
     {
       "ticker": "META",
@@ -419,7 +419,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1326801/000132680125000017/meta-20241231.htm",
       "source_path": "2024/meta_10-k_2025-01-30_0001326801-25-000017.htm",
       "local_path": "2024/meta_10-k_2025-01-30_0001326801-25-000017.md",
-      "characters": 1111640
+      "characters": 569106
     },
     {
       "ticker": "META",
@@ -432,7 +432,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1326801/000132680124000012/meta-20231231.htm",
       "source_path": "2023/meta_10-k_2024-02-02_0001326801-24-000012.htm",
       "local_path": "2023/meta_10-k_2024-02-02_0001326801-24-000012.md",
-      "characters": 1132443
+      "characters": 563278
     },
     {
       "ticker": "META",
@@ -445,7 +445,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1326801/000132680123000013/meta-20221231.htm",
       "source_path": "2022/meta_10-k_2023-02-02_0001326801-23-000013.htm",
       "local_path": "2022/meta_10-k_2023-02-02_0001326801-23-000013.md",
-      "characters": 1097272
+      "characters": 539205
     },
     {
       "ticker": "META",
@@ -458,7 +458,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1326801/000132680122000018/fb-20211231.htm",
       "source_path": "2021/meta_10-k_2022-02-03_0001326801-22-000018.htm",
       "local_path": "2021/meta_10-k_2022-02-03_0001326801-22-000018.md",
-      "characters": 1000493
+      "characters": 496020
     },
     {
       "ticker": "TSLA",
@@ -471,7 +471,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828026003952/tsla-20251231.htm",
       "source_path": "2025/tsla_10-k_2026-01-29_0001628280-26-003952.htm",
       "local_path": "2025/tsla_10-k_2026-01-29_0001628280-26-003952.md",
-      "characters": 1065096
+      "characters": 474588
     },
     {
       "ticker": "TSLA",
@@ -484,7 +484,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828025003063/tsla-20241231.htm",
       "source_path": "2024/tsla_10-k_2025-01-30_0001628280-25-003063.htm",
       "local_path": "2024/tsla_10-k_2025-01-30_0001628280-25-003063.md",
-      "characters": 1376305
+      "characters": 489120
     },
     {
       "ticker": "TSLA",
@@ -497,7 +497,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1318605/000162828024002390/tsla-20231231.htm",
       "source_path": "2023/tsla_10-k_2024-01-29_0001628280-24-002390.htm",
       "local_path": "2023/tsla_10-k_2024-01-29_0001628280-24-002390.md",
-      "characters": 1441026
+      "characters": 505211
     },
     {
       "ticker": "TSLA",
@@ -510,7 +510,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1318605/000095017023001409/tsla-20221231.htm",
       "source_path": "2022/tsla_10-k_2023-01-31_0000950170-23-001409.htm",
       "local_path": "2022/tsla_10-k_2023-01-31_0000950170-23-001409.md",
-      "characters": 768222
+      "characters": 494244
     },
     {
       "ticker": "TSLA",
@@ -523,7 +523,7 @@
       "source_url": "https://www.sec.gov/Archives/edgar/data/1318605/000095017022000796/tsla-20211231.htm",
       "source_path": "2021/tsla_10-k_2022-02-07_0000950170-22-000796.htm",
       "local_path": "2021/tsla_10-k_2022-02-07_0000950170-22-000796.md",
-      "characters": 858458
+      "characters": 548513
     }
   ]
 }

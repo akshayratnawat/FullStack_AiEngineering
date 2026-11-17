@@ -8,6 +8,9 @@ Run from the backend folder, where docling is installed (dev group):
     uv run python ../data/convert_to_markdown.py            # convert everything
     uv run python ../data/convert_to_markdown.py --limit 1  # try one file first
 
+Each filing is cleaned first (see sec_html_cleanup.py) so Docling sees real headings
+and compact tables.
+
 Also writes data/markdown/manifest.json: the same metadata as
 data/downloads/manifest.json, with local_path pointing at the .md file.
 
@@ -20,9 +23,13 @@ import argparse
 import json
 import time
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 
+from docling.datamodel.base_models import DocumentStream
 from docling.document_converter import DocumentConverter
+
+from sec_html_cleanup import clean_sec_html
 
 DATA_DIR = Path(__file__).resolve().parent
 INPUT_DIR = DATA_DIR / "downloads"
@@ -88,8 +95,9 @@ def main() -> None:
 
         started = time.perf_counter()
         try:
-            result = converter.convert(source)
-            markdown = result.document.export_to_markdown()
+            cleaned_html, stats = clean_sec_html(source.read_text(encoding="utf-8"))
+            stream = DocumentStream(name=source.name, stream=BytesIO(cleaned_html.encode("utf-8")))
+            markdown = converter.convert(stream).document.export_to_markdown()
         except Exception as error:  # keep going; report at the end
             failed.append((source, f"{type(error).__name__}: {error}"))
             print(f"{label}: FAILED ({type(error).__name__})")
@@ -98,7 +106,10 @@ def main() -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(markdown, encoding="utf-8")
         done += 1
-        print(f"{label}: {len(markdown):,} chars in {time.perf_counter() - started:.1f}s")
+        print(
+            f"{label}: {len(markdown):,} chars, {stats['headings']} headings, "
+            f"{time.perf_counter() - started:.1f}s"
+        )
 
     count = write_manifest()
     print(f"\nManifest: {OUTPUT_DIR / 'manifest.json'} ({count} filings)")

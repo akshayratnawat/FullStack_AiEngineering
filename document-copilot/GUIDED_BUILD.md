@@ -811,6 +811,98 @@ The real check is manual, signed in: New chat → send a message → watch the r
 
 ---
 
+## Part 4 — The corpus and retrieval (backend)
+
+### Step 9 — Chunk, embed and store the filings
+
+**Goal.** Every filing in `source_documents` is split into chunks, each chunk is embedded, and the rows are stored in `document_chunks` with the section and filing details. Re-running never embeds (or pays for) a chunk twice.
+
+**Why.** Retrieval can only find what is stored as small, embedded, searchable pieces. A whole 10-K is far too big to send to a model, and one vector per filing would blur everything together.
+
+**Prompt the AI.**
+
+> Add chunk ingestion. `app/embeddings.py`: an async client for the Azure OpenAI v1 API (the plain OpenAI SDK pointed at the resource URL; `model` is the Azure *deployment name*) and `embed_texts`, which returns one vector per text and fails loudly if the size is not 1536. `ingest/chunking.py`: split a filing's Markdown into chunks of at most 512 tokens, keeping tables intact, and record each chunk's section headings. `ingest/ingest_chunks.py`: read `source_documents`, chunk and embed in batches, insert rows with `chunk_index`, `section`, `token_count`, `embedding` and `chunk_metadata` (ticker, form, fiscal year, filing date, accession number, headings). Never send `search_vector`: Postgres generates it. Skip chunks already stored for a document. Flags: `--dry-run`, `--accession`, `--chunk-index`, `--force`. Add unit tests for chunking and embeddings with no network.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/embeddings.py` | Embedding client and `embed_texts`; used by ingestion now and by retrieval for the question |
+| `ingest/chunking.py` | Markdown → `Chunk` objects (content, section, headings, token count) |
+| `ingest/ingest_chunks.py` | The script: chunk, embed, insert, skip what is stored |
+| `app/config.py` | Gains `azure_openai_endpoint` (required, placeholder-checked) |
+
+**Verify.** Do it small before doing it big:
+
+```bash
+cd backend
+uv run python ingest/ingest_chunks.py --dry-run --accession 0000320193-25-000079   # 130 chunks, max 512 tokens
+uv run python ingest/ingest_chunks.py --accession 0000320193-25-000079 --chunk-index 49
+uv run python ingest/ingest_chunks.py --accession 0000320193-25-000079 --chunk-index 49  # "skipped 1 already stored"
+uv run python ingest/ingest_chunks.py                                                    # everything
+```
+
+The one-chunk run stored Apple's FY2025 iPhone revenue table (485 tokens, 1536-number vector, section "Item 7. Management's Discussion…", `search_vector` filled in by Postgres). The full run finished with 40 filings and **11,240 chunks**, about 1.1M tokens billed on the final run.
+
+**Check your understanding.**
+
+- *Why test one chunk first?* A wrong deployment name, key or column fails on the first call. Finding that out on one chunk costs nothing; finding it out 5,000 chunks in costs money.
+- *Why store `ticker`, `fiscal_year` and the rest inside every chunk?* Retrieval filters and citations need them, and it saves a join on every search.
+- *Why is `search_vector` never sent?* It is a generated column; Postgres rebuilds it from `content` on every insert, so it can never drift out of sync.
+- *How does a re-run know what to skip?* It lists the `chunk_index` values already stored for the document and embeds only the rest.
+
+**Common mistakes.**
+
+- **Using the model name where Azure wants the deployment name.** `OPENAI_EMBEDDING_MODEL` must be the name you gave the deployment.
+- **A missing `AZURE_OPENAI_ENDPOINT`.** Settings fail on startup, so even `--dry-run` refuses to start. The client accepts the URL with or without the trailing `/openai/v1`.
+- **Treating a crash as a restart.** The first full run died on a network error (`httpx.ReadError`) in the middle of an insert. Because chunks are skipped when already stored, re-running the same command finished the job and billed only the rest.
+- **Piping a long run through `tail`.** The output only appears when the command ends, so you see nothing while it works. Redirect to a log file instead.
+
+### Step 10 — Hybrid retrieval: semantic search, keyword search, fusion
+
+**Goal.** `retrieve(engine, client, question, top_k, ticker, fiscal_year)` returns the best passages for a question: each with its fused score and the chunks on either side of it.
+
+**Why.** Meaning search finds a passage worded differently from the question; keyword search finds exact terms such as "iPhone" or a figure. Each misses what the other catches, so both run and their rankings are merged.
+
+**Prompt the AI.**
+
+> Add retrieval under `app/retrieval/`. `queries.py`: a pgvector cosine-distance search over `document_chunks.embedding`, a full-text search over `search_vector`, and a fetch of chunks by (document, index); each returns a small `ChunkHit` dataclass and takes optional `ticker` and `fiscal_year` filters. `fusion.py`: Reciprocal Rank Fusion in plain Python, no library. `retriever.py`: embed the question, run both searches concurrently, fuse them, keep the top `top_k`, and attach neighbouring chunks. The Supabase API client cannot order by vector distance, so add `app/database/engine.py` with an async SQLAlchemy engine on `DATABASE_URL`. Unit tests with no network or database.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/engine.py` | `create_search_engine()`: async engine for the retrieval queries |
+| `app/retrieval/queries.py` | `semantic_search`, `keyword_search`, `get_chunks`, `or_tsquery` |
+| `app/retrieval/fusion.py` | `reciprocal_rank_fusion`; `RRF_K = 60` |
+| `app/retrieval/retriever.py` | `retrieve` and the `Passage` result |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/retrieval -q       # 6 passed
+uv run ruff check app tests
+```
+
+Live, against the full corpus: "What was Apple's iPhone net sales revenue?" (ticker AAPL) returned the Item 7 MD&A chunks, and "How much revenue came from data center for NVIDIA?" (ticker NVDA) returned the Data Center revenue passages first. These were checked by eye, not by an automated test; an evaluation set comes later.
+
+**Check your understanding.**
+
+- *Why does RRF use ranks, not scores?* Vector distances and text-search ranks are on different scales. Ranks are comparable, so there is nothing to normalise. A chunk found by both searches beats one found by only one.
+- *What is `RRF_K = 60`?* It softens the gap between neighbouring ranks (`1 / (60 + rank)`). 60 is the value from the original paper; change it only if an evaluation shows a reason.
+- *Why OR the keywords?* Postgres's usual query helpers AND every word, so one word the filing never uses returns nothing. ORing the words and ranking with `ts_rank_cd` suits a question-shaped query. Keeping only letters and digits also stops user text from injecting query syntax.
+- *Why fetch neighbours?* A table or an explanation often runs across two or three chunks; the hit alone can cut it off.
+
+**Common mistakes.**
+
+- **Forgetting `greenlet`.** SQLAlchemy's async mode needs it. Install `sqlalchemy[asyncio]`, not plain `sqlalchemy`.
+- **Running async psycopg on Windows' default event loop.** It fails with "cannot use the ProactorEventLoop". Use `SelectorEventLoop` for local scripts; Linux (Railway) is unaffected.
+- **Searching all companies at once.** A question like "which company had supply-chain risk?" with no ticker returned only JPMorgan risk-management sections: the query matched "risk", and JPM has several times more chunks than the others. Filter by ticker, or search each company separately and compare.
+- **Putting `-` or `&` characters from user text into a text-search query.** Always build the query from sanitised words, never from raw input.
+
+---
+
 ## Roadmap
 
 Steps still to be written into this guide, in build order (from [docs/architecture.md](docs/architecture.md)):
@@ -829,9 +921,9 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 5 | Shared frontend API client | Planned |
 | 6 | Chat endpoint with a stubbed reply | **Written (Part 3, Step 7)** |
 | 7 | Chat UI | **Written (Part 3, Step 8)** |
-| 8 | Ingestion: Markdown, chunking, embeddings | Planned |
-| 9 | Semantic search (pgvector) | Planned |
-| 10 | Keyword search + Reciprocal Rank Fusion | Planned |
+| 8 | Ingestion: Markdown, chunking, embeddings | **Written (Part 4, Step 9)** |
+| 9 | Semantic search (pgvector) | **Written (Part 4, Step 10)** |
+| 10 | Keyword search + Reciprocal Rank Fusion | **Written (Part 4, Step 10)** |
 | 11 | PydanticAI document agent | Planned |
 | 12 | Citation validation and grounding | Planned |
 | 13 | Final UI: citations, source passages, errors | Planned |

@@ -24,8 +24,11 @@ class Settings(BaseSettings):
     supabase_anon_key: SecretStr
     supabase_service_role_key: SecretStr
     database_url: SecretStr  # direct/session connection (it contains the DB password)
-    openai_api_key: SecretStr
+    openai_api_key: SecretStr  # the Azure AI Foundry / Azure OpenAI resource key
+    # Resource URL, e.g. https://<resource>.openai.azure.com (Azure OpenAI v1 API).
+    azure_openai_endpoint: str
 
+    # On Azure this is the DEPLOYMENT name you gave the model, not the model name.
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int = 1536  # must match the pgvector column size
 
@@ -38,6 +41,7 @@ class Settings(BaseSettings):
         "supabase_service_role_key",
         "database_url",
         "openai_api_key",
+        "azure_openai_endpoint",
     )
     @classmethod
     def reject_placeholders(cls, value: str | SecretStr, info: ValidationInfo) -> str | SecretStr:

@@ -14,8 +14,10 @@ def reciprocal_rank_fusion[T: Hashable](
     (which live on different scales) combine without any normalising. Ties keep the order
     in which the item was first seen.
     """
-    scores: dict[T, float] = {}
+    scores: dict[T, float] = {}  # item -> running total across all lists
     for ranking in rankings:
-        for rank, item in enumerate(ranking, start=1):
+        for rank, item in enumerate(ranking, start=1):  # rank 1 = best
+            # An item missing from a list simply adds nothing for that list.
             scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
+    # sorted() is stable, so equal scores keep the order they were first added in.
     return sorted(scores.items(), key=lambda pair: pair[1], reverse=True)

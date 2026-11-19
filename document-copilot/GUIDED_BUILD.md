@@ -885,7 +885,7 @@ uv run pytest tests/retrieval -q       # 6 passed
 uv run ruff check app tests
 ```
 
-Live, against the full corpus: "What was Apple's iPhone net sales revenue?" (ticker AAPL) returned the Item 7 MD&A chunks, and "How much revenue came from data center for NVIDIA?" (ticker NVDA) returned the Data Center revenue passages first. These were checked by eye, not by an automated test; an evaluation set comes later.
+Live, against the full corpus: "What was Apple's iPhone net sales revenue?" (ticker AAPL) returned the Item 7 MD&A chunks, and "How much revenue came from data center for NVIDIA?" (ticker NVDA) returned the Data Center revenue passages first. These were checked by eye, not by an automated test; an evaluation set comes later. To try your own questions, run `uv run python scripts/try_retrieval.py "your question" --ticker NVDA`; `app/retrieval/README.md` has the flow diagram and every default (top 8, 30 candidates per search, 1 neighbour each side, `RRF_K` 60).
 
 **Check your understanding.**
 

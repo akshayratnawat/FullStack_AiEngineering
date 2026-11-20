@@ -2,11 +2,13 @@
 
 import re
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from sqlalchemy import Select, func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+from app.config import settings
 from app.database.models.document_chunks import DocumentChunk
 
 _META = DocumentChunk.chunk_metadata
@@ -74,15 +76,20 @@ async def semantic_search(
         return [_hit(row) for row in await session.execute(_filtered(query, ticker, fiscal_year))]
 
 
-def or_tsquery(text: str) -> str:
+def or_tsquery(text: str, ignore: Collection[str] = ()) -> str:
     """'Apple iPhone revenue?' -> 'Apple | iPhone | revenue'.
+
+    Words in `ignore` (lower-case, e.g. "tell", "company") are dropped first: they are
+    filler that would match chunks for no good reason.
 
     `websearch_to_tsquery` ANDs every word, so a natural-language question with one
     unlucky word matches nothing. OR-ing the words and letting `ts_rank_cd` put chunks
     matching more of them first suits a question-shaped query. Keeping only alphanumeric
     words also means user text can never inject tsquery syntax.
     """
-    return " | ".join(re.findall(r"[A-Za-z0-9]+", text))
+    skip = set(ignore)
+    words = re.findall(r"[A-Za-z0-9]+", text)
+    return " | ".join(word for word in words if word.lower() not in skip)
 
 
 async def keyword_search(
@@ -93,8 +100,8 @@ async def keyword_search(
     fiscal_year: int | None = None,
 ) -> list[ChunkHit]:
     """Chunks sharing the most query words, best first (Postgres full-text search, GIN index)."""
-    tsquery_text = or_tsquery(text)
-    if not tsquery_text:  # the question had no searchable words
+    tsquery_text = or_tsquery(text, settings.keyword_ignore_words)
+    if not tsquery_text:  # the question had no searchable words left after dropping filler
         return []
     # to_tsquery applies English stemming and drops stopwords, matching how search_vector was built.
     tsquery = func.to_tsquery("english", tsquery_text)

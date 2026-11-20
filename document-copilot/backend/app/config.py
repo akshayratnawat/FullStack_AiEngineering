@@ -1,7 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
-from pydantic import SecretStr, ValidationInfo, field_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Absolute path, so .env is found no matter where the process is started from.
@@ -28,12 +28,39 @@ class Settings(BaseSettings):
     # Resource URL, e.g. https://<resource>.openai.azure.com (Azure OpenAI v1 API).
     azure_openai_endpoint: str
 
-    # On Azure this is the DEPLOYMENT name you gave the model, not the model name.
+    # On Azure these are DEPLOYMENT names you gave the models, not the model names.
+    # The chat model writes the answers; it is a different deployment from the embedding one.
+    openai_chat_model: str = "gpt-4.1-mini"
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int = 1536  # must match the pgvector column size
 
     # Comma-separated browser origins allowed to call the API (CORS).
     allowed_origins: str = "http://localhost:5173"
+
+    # --- Retrieval (see app/retrieval/README.md). Each can be overridden by an env var,
+    # e.g. RETRIEVAL_TOP_K=10. ---
+    retrieval_top_k: int = Field(default=8, ge=1)  # passages returned after fusion
+    retrieval_candidates: int = Field(default=30, ge=1)  # chunks each search returns before fusion
+    retrieval_neighbor_window: int = Field(default=1, ge=0)  # chunks added each side of a hit; 0 = none
+    retrieval_rrf_k: int = Field(default=60, ge=1)  # smoothing constant in 1 / (k + rank)
+
+    # Words the keyword search ignores, in addition to the English stopwords (the, of, was...)
+    # that Postgres already drops. These are filler or words that appear in almost every filing,
+    # so matching them says nothing about relevance. Lower-case. As an env var it must be JSON:
+    # KEYWORD_IGNORE_WORDS='["tell","company"]' (this replaces the whole list).
+    keyword_ignore_words: list[str] = [
+        # request filler
+        "tell", "show", "give", "please", "explain", "describe", "summarize", "summarise",
+        "list", "compare", "comparing", "provide", "find", "say", "says", "said", "mention",
+        "mentioned", "discuss", "discussed", "according", "regarding", "about", "across",
+        "between", "overall", "based", "using", "use", "need", "want", "know", "help",
+        # generic filing words, present in every chunk
+        "company", "companies", "filing", "filings", "report", "reported", "reports",
+        "annual", "form", "10", "k", "q", "s",
+        # vague connectors that carry no topic
+        "also", "many", "much", "main", "key", "major", "important", "different",
+        "specific", "particular", "related", "within", "during", "among",
+    ]
 
     @field_validator(
         "supabase_url",
@@ -42,6 +69,7 @@ class Settings(BaseSettings):
         "database_url",
         "openai_api_key",
         "azure_openai_endpoint",
+        "openai_chat_model",
     )
     @classmethod
     def reject_placeholders(cls, value: str | SecretStr, info: ValidationInfo) -> str | SecretStr:

@@ -32,16 +32,21 @@ Related: `app/embeddings.py` embeds the question; `app/database/engine.py` gives
 
 ## Default parameters
 
-`retrieve(engine, embedding_client, query, *, top_k, candidates, neighbor_window, ticker, fiscal_year)`
+All defaults live in `app/config.py` (class `Settings`). Override any of them with an env var of the same name in upper case, e.g. `RETRIEVAL_TOP_K=10`.
 
-| Parameter | Default | Meaning |
-| --------- | ------- | ------- |
-| `top_k` | **8** | Passages returned after fusion |
-| `candidates` | **30** | How many chunks each search returns before fusion |
-| `neighbor_window` | **1** | Chunks added on each side of a hit (1 → previous and next) |
-| `ticker` | none | Only this company (stored upper-case, e.g. `AAPL`) |
-| `fiscal_year` | none | Only this fiscal year of the filing |
-| `RRF_K` (`fusion.py`) | **60** | Smoothing constant in `1 / (k + rank)` |
+`retrieve(engine, embedding_client, query, *, top_k, candidates, neighbor_window, ticker, fiscal_year)`: a size left as `None` uses the setting below.
+
+| Setting | Default | Meaning |
+| ------- | ------- | ------- |
+| `retrieval_top_k` | **8** | Passages returned after fusion |
+| `retrieval_candidates` | **30** | How many chunks each search returns before fusion |
+| `retrieval_neighbor_window` | **1** | Chunks added on each side of a hit (0 = none) |
+| `retrieval_rrf_k` | **60** | Smoothing constant in `1 / (k + rank)` |
+| `keyword_ignore_words` | ~50 words | Filler and generic filing words the keyword search skips (e.g. "tell", "company", "10-K") |
+
+`ticker` and `fiscal_year` default to none (search everything).
+
+**Ignored words.** Postgres already drops English stopwords (the, of, was...). `keyword_ignore_words` adds request filler ("please", "describe", "summarize") and words present in nearly every filing ("company", "filing", "annual"). Matching them says nothing about relevance, so they would only add noise to the keyword ranking. They affect the keyword search only; the semantic search still sees the whole question. Add a word to the list in `config.py` when you see it pulling in irrelevant chunks.
 
 ## How many chunks come back
 

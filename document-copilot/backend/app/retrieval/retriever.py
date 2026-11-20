@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from app.config import settings
 from app.embeddings import embed_texts
 from app.retrieval import queries
 from app.retrieval.fusion import reciprocal_rank_fusion
@@ -24,12 +25,17 @@ async def retrieve(
     embedding_client: AsyncOpenAI,
     query: str,
     *,
-    top_k: int = 8,
-    candidates: int = 30,  # how deep each search looks before fusion
-    neighbor_window: int = 1,  # chunks to add on each side of a hit (a table often spans chunks)
+    top_k: int | None = None,  # passages to return
+    candidates: int | None = None,  # how deep each search looks before fusion
+    neighbor_window: int | None = None,  # chunks each side of a hit (a table often spans chunks)
     ticker: str | None = None,
     fiscal_year: int | None = None,
 ) -> list[Passage]:
+    """Any size left as None uses its `retrieval_*` default from `app.config.settings`."""
+    top_k = settings.retrieval_top_k if top_k is None else top_k
+    candidates = settings.retrieval_candidates if candidates is None else candidates
+    neighbor_window = settings.retrieval_neighbor_window if neighbor_window is None else neighbor_window
+
     # 1. Turn the question into a vector (the second value, tokens billed, is not needed here).
     vectors, _ = await embed_texts(embedding_client, [query])
 
@@ -42,7 +48,9 @@ async def retrieve(
     # 3. Merge the two ranked lists with RRF and keep the best `top_k`.
     #    Fusion works on ids only, so look the full chunk up again by id afterwards.
     by_id = {hit.id: hit for hit in [*semantic, *keyword]}
-    fused = reciprocal_rank_fusion([[h.id for h in semantic], [h.id for h in keyword]])[:top_k]
+    fused = reciprocal_rank_fusion(
+        [[h.id for h in semantic], [h.id for h in keyword]], k=settings.retrieval_rrf_k
+    )[:top_k]
     hits = [(by_id[chunk_id], score) for chunk_id, score in fused]
 
     # 4. Work out which neighbouring chunks to fetch: e.g. window 1 -> offsets [-1, +1].

@@ -11,16 +11,21 @@ from app.config import settings
 AZURE_V1_PATH = "/openai/v1"
 
 
+def azure_v1_base_url() -> str:
+    """The configured endpoint with `/openai/v1` on the end, whether or not it was written that way."""
+    base_url = settings.azure_openai_endpoint.rstrip("/")
+    if not base_url.endswith(AZURE_V1_PATH):
+        base_url += AZURE_V1_PATH
+    return base_url
+
+
 def create_embedding_client() -> AsyncOpenAI:
     """Client for the Azure OpenAI v1 API: the plain OpenAI SDK pointed at the resource URL.
 
     The v1 API needs no `api-version` parameter, and `model` is the deployment name.
     """
-    base_url = settings.azure_openai_endpoint.rstrip("/")
-    if not base_url.endswith(AZURE_V1_PATH):
-        base_url += AZURE_V1_PATH
     return AsyncOpenAI(
-        base_url=base_url,
+        base_url=azure_v1_base_url(),
         api_key=settings.openai_api_key.get_secret_value(),
         max_retries=5,  # the SDK backs off on rate limits (429) and transient errors
     )

@@ -22,7 +22,7 @@ async def main() -> None:
     parser.add_argument("question")
     parser.add_argument("--ticker", help="only this company, e.g. AAPL")
     parser.add_argument("--year", type=int, help="only this fiscal year")
-    parser.add_argument("--top-k", type=int, default=5, help="passages to return (default 5)")
+    parser.add_argument("--top-k", type=int, help="passages to return (default: RETRIEVAL_TOP_K from config)")
     parser.add_argument("--full", action="store_true", help="print each passage in full, not a preview")
     args = parser.parse_args()
 

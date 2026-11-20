@@ -2,13 +2,14 @@
 
 from collections.abc import Hashable, Sequence
 
-RRF_K = 60  # the constant from the original RRF paper; damps the lead of rank 1 over rank 2
-
 
 def reciprocal_rank_fusion[T: Hashable](
-    rankings: Sequence[Sequence[T]], k: int = RRF_K
+    rankings: Sequence[Sequence[T]], k: int
 ) -> list[tuple[T, float]]:
     """Return (item, score) best first. An item scores 1 / (k + rank) in every list it appears in.
+
+    `k` smooths the gap between neighbouring ranks; 60 is the value from the original RRF
+    paper and the default of `settings.retrieval_rrf_k`.
 
     Only ranks matter, never the raw scores, so vector distances and text-search ranks
     (which live on different scales) combine without any normalising. Ties keep the order

@@ -17,6 +17,19 @@ def test_or_tsquery_keeps_only_words():
     assert or_tsquery("?!") == ""
 
 
+def test_or_tsquery_drops_ignored_words_in_any_case():
+    ignore = ["tell", "company"]
+    assert or_tsquery("Tell me about the Company revenue", ignore) == "me | about | the | revenue"
+    assert or_tsquery("tell company", ignore) == ""  # nothing searchable left
+
+
+def test_default_ignore_list_removes_filler_but_keeps_finance_terms():
+    from app.config import settings
+
+    query = or_tsquery("Please describe the company's iPhone revenue in the 10-K", settings.keyword_ignore_words)
+    assert query == "the | iPhone | revenue | in | the"
+
+
 def test_retrieve_fuses_and_attaches_neighbors(monkeypatch):
     chunks = [chunk(i) for i in range(5)]
     seen = {}

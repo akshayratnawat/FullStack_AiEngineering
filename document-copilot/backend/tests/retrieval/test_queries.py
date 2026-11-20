@@ -15,7 +15,9 @@ from app.retrieval import queries
 
 
 class FakeSession:
-    executed: ClassVar[list] = []
+    """Stands in for a database session: records each statement it is asked to run and returns no rows."""
+
+    executed: ClassVar[list] = []  # shared on purpose: the code under test creates its own session
 
     def __init__(self, engine):
         pass
@@ -47,6 +49,7 @@ def sql(monkeypatch):
 
 
 def test_semantic_search_orders_by_cosine_distance(sql):
+    """Semantic search: nearest-first by cosine distance (<=>), limited, skipping unembedded chunks."""
     text, values = sql(queries.semantic_search(None, [0.1, 0.2], limit=7))
     assert "<=>" in text  # pgvector cosine distance
     assert "ORDER BY" in text and "LIMIT" in text
@@ -55,6 +58,7 @@ def test_semantic_search_orders_by_cosine_distance(sql):
 
 
 def test_filters_apply_only_when_given(sql):
+    """Ticker and year add a condition only when given; the ticker is upper-cased, the year compared as text."""
     plain, plain_values = sql(queries.semantic_search(None, [0.1], limit=5))
     assert "AAPL" not in plain_values and "2024" not in plain_values
 
@@ -65,6 +69,7 @@ def test_filters_apply_only_when_given(sql):
 
 
 def test_keyword_search_ors_the_words_and_ranks(sql):
+    """Keyword search: words OR-ed into one to_tsquery, matched with @@, best ts_rank_cd first."""
     text, values = sql(queries.keyword_search(None, "iPhone revenue?", limit=9))
     assert "@@" in text  # text-search match
     assert "to_tsquery" in text and "iPhone | revenue" in values
@@ -72,6 +77,7 @@ def test_keyword_search_ors_the_words_and_ranks(sql):
 
 
 def test_keyword_search_without_words_skips_the_database(monkeypatch):
+    """A question with no searchable words builds no query at all."""
     monkeypatch.setattr(queries, "AsyncSession", FakeSession)
     FakeSession.executed = []
     assert asyncio.run(queries.keyword_search(None, "?!", limit=5)) == []
@@ -79,6 +85,7 @@ def test_keyword_search_without_words_skips_the_database(monkeypatch):
 
 
 def test_get_chunks_matches_document_and_index_together(sql):
+    """Neighbour fetch matches the (document, chunk index) pair together, not each column alone."""
     doc = uuid.uuid4()
     text, values = sql(queries.get_chunks(None, {(doc, 3), (doc, 5)}))
     assert "(document_chunks.document_id, document_chunks.chunk_index) IN" in text
@@ -87,6 +94,7 @@ def test_get_chunks_matches_document_and_index_together(sql):
 
 
 def test_get_chunks_with_nothing_wanted_skips_the_database(monkeypatch):
+    """Asking for no chunks builds no query at all."""
     monkeypatch.setattr(queries, "AsyncSession", FakeSession)
     FakeSession.executed = []
     assert asyncio.run(queries.get_chunks(None, set())) == []

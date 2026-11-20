@@ -1,3 +1,5 @@
+"""Tests for retrieval/retriever.py and the keyword-query builder; searches are faked, no database."""
+
 import asyncio
 import uuid
 
@@ -8,22 +10,26 @@ DOC = uuid.uuid4()
 
 
 def chunk(index: int) -> ChunkHit:
+    """A fake chunk at position `index` of one shared document."""
     return ChunkHit(uuid.uuid4(), DOC, index, f"text {index}", "Item 7", "AAPL", "10-K", 2025, "2025-10-31", "acc")
 
 
 def test_or_tsquery_keeps_only_words():
+    """Only letters and digits survive, so user text can't inject tsquery operators."""
     assert or_tsquery("iPhone revenue?") == "iPhone | revenue"
     assert or_tsquery("a & b | !c ') ; drop") == "a | b | c | drop"  # no tsquery syntax gets through
     assert or_tsquery("?!") == ""
 
 
 def test_or_tsquery_drops_ignored_words_in_any_case():
+    """Words in the ignore list are dropped whatever their case; nothing left gives an empty query."""
     ignore = ["tell", "company"]
     assert or_tsquery("Tell me about the Company revenue", ignore) == "me | about | the | revenue"
     assert or_tsquery("tell company", ignore) == ""  # nothing searchable left
 
 
 def test_default_ignore_list_removes_filler_but_keeps_finance_terms():
+    """The configured list drops filler (please, describe, company, 10-K) but keeps iPhone and revenue."""
     from app.config import settings
 
     query = or_tsquery("Please describe the company's iPhone revenue in the 10-K", settings.keyword_ignore_words)
@@ -31,6 +37,7 @@ def test_default_ignore_list_removes_filler_but_keeps_finance_terms():
 
 
 def test_retrieve_fuses_and_attaches_neighbors(monkeypatch):
+    """End to end with the searches faked: fused order, filters passed through, neighbours attached (none before chunk 0)."""
     chunks = [chunk(i) for i in range(5)]
     seen = {}
 

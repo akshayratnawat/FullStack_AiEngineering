@@ -93,6 +93,13 @@ def test_get_chunks_matches_document_and_index_together(sql):
     assert sorted(index for _, index in pairs) == [3, 5]
 
 
+def test_get_chunk_by_id_filters_on_the_chunk_id(sql):
+    """Lookup by id: a single equality condition on the chunk's own id."""
+    wanted = uuid.uuid4()
+    text, values = sql(queries.get_chunk_by_id(None, wanted))
+    assert "document_chunks.id =" in text and wanted in values
+
+
 def test_get_chunks_with_nothing_wanted_skips_the_database(monkeypatch):
     """Asking for no chunks builds no query at all."""
     monkeypatch.setattr(queries, "AsyncSession", FakeSession)

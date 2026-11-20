@@ -115,6 +115,14 @@ async def keyword_search(
         return [_hit(row) for row in await session.execute(_filtered(query, ticker, fiscal_year))]
 
 
+async def get_chunk_by_id(engine: AsyncEngine, chunk_id: uuid.UUID) -> ChunkHit | None:
+    """One chunk by its id, or None if there is no such chunk."""
+    query = select(*COLUMNS).where(DocumentChunk.id == chunk_id)
+    async with AsyncSession(engine) as session:
+        rows = [_hit(row) for row in await session.execute(query)]
+    return rows[0] if rows else None
+
+
 async def get_chunks(engine: AsyncEngine, wanted: set[tuple[uuid.UUID, int]]) -> list[ChunkHit]:
     """Fetch specific chunks by (document id, chunk index); used to load a hit's neighbours."""
     if not wanted:

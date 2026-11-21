@@ -1,46 +1,53 @@
 """The document agent: instructions + tools + a typed answer, checked for grounding.
 
-The agent searches the filings with its tools, then must return a `GroundedAnswer`. Before
-that answer is accepted, the grounding validator checks it against what the tools actually
-returned. If the check fails, the model is told what is wrong and gets ONE retry; a second
-failure raises, and the caller shows a controlled error instead of an unsupported answer.
+The agent searches the filings with its tools, then must return a `ModelAnswer` (text with
+`[S3]`-style source markers). Before it is accepted, the grounding validator checks it against
+what the tools actually returned and numbers the markers, giving a `GroundedAnswer`. If the
+check fails, the model is told what is wrong and gets `agent_output_retries` more tries; after
+that it raises, and the caller shows a controlled error instead of an unsupported answer.
 """
 
 from pathlib import Path
 
+import structlog
 from pydantic_ai import Agent, ModelRetry, RunContext, UsageLimits
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.models import Model
 
 from app.assistant.deps import DocumentAgentDeps
 from app.assistant.model import create_chat_model
-from app.assistant.outputs import GroundedAnswer, SourcePassage
+from app.assistant.outputs import GroundedAnswer, ModelAnswer, SourcePassage
 from app.assistant.tools import read_chunk, read_surrounding_chunks, search_filings
 from app.config import settings
-from app.grounding.validator import GroundingError, validate
+from app.grounding.validator import GroundingError, ground
+
+logger = structlog.get_logger()
 
 INSTRUCTIONS = (Path(__file__).parent / "instructions.md").read_text(encoding="utf-8")
 
 
-def create_agent(model: Model | None = None) -> Agent[DocumentAgentDeps, GroundedAnswer]:
+def create_agent(model: Model | None = None) -> Agent[DocumentAgentDeps, ModelAnswer]:
     """Build the agent. Pass a `model` only in tests; otherwise the configured Azure chat model."""
     agent = Agent(
         model or create_chat_model(),
         deps_type=DocumentAgentDeps,
-        output_type=GroundedAnswer,
+        output_type=ModelAnswer,
         instructions=INSTRUCTIONS,
         tools=[search_filings, read_chunk, read_surrounding_chunks],
-        # One retry for a wrong answer (the grounding check below) and one per tool call
-        # (for example an unknown chunk_id). A second failure raises.
-        retries={"output": 1, "tools": 1},
+        # Retries for a wrong answer (the grounding check below; `agent_output_retries`) and one per tool call
+        # (for example an unknown source_id). A second failure raises.
+        retries={"output": settings.agent_output_retries, "tools": 1},
     )
 
     @agent.output_validator
-    def check_grounding(ctx: RunContext[DocumentAgentDeps], answer: GroundedAnswer) -> GroundedAnswer:
+    def check_grounding(ctx: RunContext[DocumentAgentDeps], answer: ModelAnswer) -> ModelAnswer:
         """Reject an answer whose citations are not backed by what the tools returned."""
         try:
-            validate(answer, ctx.deps.retrieved)
+            ground(answer, ctx.deps.retrieved, ctx.deps.labels)
         except GroundingError as error:
+            # Without this, a question that fails twice only says "could not answer" and the
+            # reason is lost. Logged so the live runs show which rule the model breaks.
+            logger.warning("answer_not_grounded", problems=error.problems)
             # The message lists every broken rule, worded for the model, so one retry can fix them all.
             raise ModelRetry(str(error)) from error
         return answer
@@ -49,7 +56,7 @@ def create_agent(model: Model | None = None) -> Agent[DocumentAgentDeps, Grounde
 
 
 async def answer_question(
-    agent: Agent[DocumentAgentDeps, GroundedAnswer],
+    agent: Agent[DocumentAgentDeps, ModelAnswer],
     deps: DocumentAgentDeps,
     question: str,
     history: list[ModelMessage] | None = None,
@@ -72,6 +79,6 @@ async def answer_question(
             total_tokens_limit=settings.agent_max_total_tokens,
         ),
     )
-    # The output validator has already accepted this answer; validating again just returns
-    # the cited passages (in marker order) for the UI and the database.
-    return result.output, validate(result.output, deps.retrieved)
+    # The output validator has already accepted this answer; grounding it again produces the
+    # numbered answer and its cited passages (in marker order) for the UI and the database.
+    return ground(result.output, deps.retrieved, deps.labels)

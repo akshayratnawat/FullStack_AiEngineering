@@ -68,7 +68,8 @@ def test_search_records_every_returned_chunk_and_shows_its_id(monkeypatch):
     reply = run(tools.search_filings(ctx, "anything"))
 
     assert set(ctx.deps.retrieved) == {h.id for h in hits}
-    assert all(f"chunk_id={h.id}" in reply for h in hits)
+    assert "[source_id=S1]" in reply and "[source_id=S2]" in reply
+    assert not any(str(h.id) in reply for h in hits)  # the model never sees the UUIDs
     assert "AAPL 10-K fiscal 2025" in reply and "text 3" in reply
 
 
@@ -97,25 +98,26 @@ def test_read_chunk_returns_and_records_the_chunk(monkeypatch):
 
     monkeypatch.setattr(tools.queries, "get_chunk_by_id", fake_get)
     ctx = make_ctx()
+    ctx.deps.labels[target.id] = "S4"  # the model saw this passage as S4 in an earlier search
 
-    reply = run(tools.read_chunk(ctx, target.id))
+    reply = run(tools.read_chunk(ctx, "S4"))
 
-    assert f"chunk_id={target.id}" in reply and "text 5" in reply
+    assert "[source_id=S4]" in reply and "text 5" in reply
     assert ctx.deps.retrieved == {target.id: target}
 
 
 @pytest.mark.parametrize("tool", [tools.read_chunk, tools.read_surrounding_chunks])
-def test_an_unknown_chunk_id_sends_the_model_back_to_retry(monkeypatch, tool):
+def test_an_unknown_source_id_sends_the_model_back_to_retry(monkeypatch, tool):
     """An id that matches nothing raises ModelRetry (the model is told to use an id from a search)."""
 
     async def fake_get(engine, chunk_id):
-        return None
+        raise AssertionError("the database must not be asked about an id the model made up")
 
     monkeypatch.setattr(tools.queries, "get_chunk_by_id", fake_get)
     ctx = make_ctx()
 
-    with pytest.raises(ModelRetry, match="Use a chunk_id from a search result"):
-        run(tool(ctx, uuid4()))
+    with pytest.raises(ModelRetry, match="Use a source_id from a search result"):
+        run(tool(ctx, "S9"))
     assert ctx.deps.retrieved == {}
 
 
@@ -138,8 +140,9 @@ def test_surrounding_chunks_come_back_in_reading_order_and_are_recorded(monkeypa
     monkeypatch.setattr(tools.queries, "get_chunk_by_id", fake_get)
     monkeypatch.setattr(tools.queries, "get_chunks", fake_get_chunks)
     ctx = make_ctx()
+    ctx.deps.labels[centre.id] = "S1"
 
-    reply = run(tools.read_surrounding_chunks(ctx, centre.id, window=2))
+    reply = run(tools.read_surrounding_chunks(ctx, "S1", window=2))
 
     assert {index for _, index in asked["wanted"]} == {4, 5, 6, 7, 8}
     assert reply.index("text 4") < reply.index("text 6") < reply.index("text 8")
@@ -161,7 +164,10 @@ def test_surrounding_chunks_never_ask_for_a_negative_position(monkeypatch):
     monkeypatch.setattr(tools.queries, "get_chunk_by_id", fake_get)
     monkeypatch.setattr(tools.queries, "get_chunks", fake_get_chunks)
 
-    run(tools.read_surrounding_chunks(make_ctx(), centre.id, window=3))
+    ctx = make_ctx()
+    ctx.deps.labels[centre.id] = "S1"
+
+    run(tools.read_surrounding_chunks(ctx, "S1", window=3))
 
     assert min(index for _, index in asked["wanted"]) == 0
 

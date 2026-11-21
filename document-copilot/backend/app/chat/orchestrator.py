@@ -21,7 +21,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 
 from app.assistant.agent import answer_question
 from app.assistant.deps import DocumentAgentDeps
-from app.assistant.outputs import GroundedAnswer
+from app.assistant.outputs import ModelAnswer
 from app.chat.messages import (
     citation_parts,
     failed_parts,
@@ -71,7 +71,7 @@ async def run_turn(
     store: ChatStore,
     thread_id: UUID,
     user_text: str,
-    agent: Agent[DocumentAgentDeps, GroundedAnswer],
+    agent: Agent[DocumentAgentDeps, ModelAnswer],
     deps: DocumentAgentDeps,
 ) -> AsyncIterator[str]:
     """The SSE events for one turn. The caller has already checked the thread is the user's."""

@@ -38,12 +38,16 @@ class Settings(BaseSettings):
     allowed_origins: str = "http://localhost:5173"
 
     # --- Agent: hard caps for ONE question, so a confused or looping model cannot run up a
-    # bill. A comparison across 4 companies needs roughly 8-10 tool calls. These are first
-    # guesses; tune them after the live question run. ---
-    agent_max_tool_calls: int = Field(default=15, ge=1)  # searches + reads per question
-    agent_max_model_requests: int = Field(default=20, ge=1)  # round trips to the chat model
-    # Counts every request's full context again, so it grows fast: 15 searches of ~5k tokens each.
-    agent_max_total_tokens: int = Field(default=500_000, ge=1)
+    # bill. A comparison across 4 companies needs roughly 8-10 tool calls; "for each company"
+    # across all 8 needs about 20 (the live run of the client brief hit 15 and 18). ---
+    # How many times the model may be sent back to fix a rejected answer (bad citations or format)
+    # before the question is refused. The first spec said one; two rescued about half of the
+    # refusals in the live runs (docs/live_verification.md).
+    agent_output_retries: int = Field(default=2, ge=0)
+    agent_max_tool_calls: int = Field(default=25, ge=1)  # searches + reads per question
+    agent_max_model_requests: int = Field(default=30, ge=1)  # round trips to the chat model
+    # Counts every request's full context again, so it grows fast: 15 searches of ~5k tokens each; the live brief run hit 500,000 twice.
+    agent_max_total_tokens: int = Field(default=800_000, ge=1)
 
     # How many of the thread's most recent stored messages (questions and answers together)
     # the agent sees as context, so follow-ups like "and for 2023?" make sense. 0 = none.

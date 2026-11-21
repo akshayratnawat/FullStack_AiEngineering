@@ -104,7 +104,7 @@ def cited_answer(monkeypatch) -> None:
 
     async def answer(agent, deps, question, history=None):
         grounded = GroundedAnswer(
-            answer="iPhone sold $201B [1].", citations=[Citation(marker=1, chunk_id=CHUNK.id)], enough_evidence=True
+            answer="iPhone sold $201B [1].", citations=[Citation(marker=1, source_id="S1")], enough_evidence=True
         )
         return grounded, [SourcePassage.from_hit(CHUNK)]
 

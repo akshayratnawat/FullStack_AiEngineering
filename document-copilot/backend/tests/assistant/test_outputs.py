@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant.deps import DocumentAgentDeps
-from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
+from app.assistant.outputs import Citation, GroundedAnswer, ModelAnswer, SourcePassage
 from app.retrieval.queries import ChunkHit
 
 
@@ -18,12 +18,11 @@ def hit() -> ChunkHit:
 
 
 def test_grounded_answer_parses_what_a_model_would_send():
-    """A well-formed answer parses, and the chunk id string becomes a real UUID."""
-    chunk_id = uuid4()
-    raw = {"answer": "iPhone sales rose [1].", "citations": [{"marker": 1, "chunk_id": str(chunk_id)}],
+    """A well-formed answer parses, and a citation carries the short source id the model copied."""
+    raw = {"answer": "iPhone sales rose [1].", "citations": [{"marker": 1, "source_id": "S1"}],
            "enough_evidence": True}
     answer = GroundedAnswer.model_validate(raw)
-    assert answer.citations[0].chunk_id == chunk_id  # the string became a real UUID
+    assert answer.citations[0].source_id == "S1"
 
 
 def test_citations_default_to_empty_for_a_not_enough_evidence_answer():
@@ -37,20 +36,25 @@ def test_citations_default_to_empty_for_a_not_enough_evidence_answer():
     [
         {"answer": "", "enough_evidence": True},  # empty answer
         {"answer": "x"},  # enough_evidence missing: the model must state it
-        {"answer": "x", "enough_evidence": True, "citations": [{"marker": 0, "chunk_id": str(uuid4())}]},
-        {"answer": "x", "enough_evidence": True, "citations": [{"marker": 1, "chunk_id": "not-a-uuid"}]},
+        {"answer": "x", "enough_evidence": True, "citations": [{"marker": 0, "source_id": "S1"}]},
+        {"answer": "x", "enough_evidence": True, "citations": [{"marker": 1}]},  # no source_id
     ],
 )
 def test_malformed_answers_are_rejected(raw):
-    """Empty answer, missing enough_evidence, marker 0 and a bad chunk id are all rejected."""
+    """Empty answer, missing enough_evidence, marker 0 and a citation with no source id are all rejected."""
     with pytest.raises(ValidationError):
         GroundedAnswer.model_validate(raw)
 
 
 def test_schema_sent_to_the_model_carries_the_field_descriptions():
     """The field descriptions reach the schema the model sees, so they act as instructions."""
-    schema = json.dumps(GroundedAnswer.model_json_schema())
-    assert "[n] marker" in schema and "Never invent one" in schema
+    schema = json.dumps(ModelAnswer.model_json_schema())
+    assert "[S3]" in schema and "Do not write a list of sources" in schema
+
+
+def test_the_model_is_not_asked_for_a_citation_list():
+    """The model writes only the text and the evidence flag; the citation list is built by the program."""
+    assert set(ModelAnswer.model_json_schema()["properties"]) == {"answer", "enough_evidence"}
 
 
 def test_source_passage_copies_the_hit_and_keeps_the_text_as_excerpt():
@@ -72,6 +76,23 @@ def test_each_turn_gets_its_own_retrieved_record():
 
 
 def test_citation_is_the_pair_the_validator_will_look_up():
-    """A citation carries the chunk id the validator will look up in `retrieved`."""
-    chunk = hit()
-    assert Citation(marker=1, chunk_id=chunk.id).chunk_id == chunk.id
+    """A citation carries the short id the validator will look up among the turn's sources."""
+    assert Citation(marker=1, source_id="S3").source_id == "S3"
+
+
+def test_chunks_get_short_ids_in_the_order_they_are_first_shown():
+    """The first chunk shown is S1, the next S2; showing a chunk again keeps its id."""
+    deps = DocumentAgentDeps(engine=None, embedding_client=None)
+    first, second = hit(), hit()
+
+    assert [deps.label_for(first), deps.label_for(second), deps.label_for(first)] == ["S1", "S2", "S1"]
+    assert deps.retrieved == {first.id: first, second.id: second}
+    assert deps.chunk_id_for("S2") == second.id and deps.chunk_id_for("S3") is None
+
+
+def test_each_turn_numbers_its_sources_from_one():
+    """Short ids are per turn: a new turn's first source is S1 again."""
+    one = DocumentAgentDeps(engine=None, embedding_client=None)
+    two = DocumentAgentDeps(engine=None, embedding_client=None)
+    one.label_for(hit())
+    assert two.label_for(hit()) == "S1"

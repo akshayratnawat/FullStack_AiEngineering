@@ -1118,6 +1118,146 @@ The server logs "Application startup complete" with the real `.env`, and shuttin
 - **Port 8000 already in use.** A second server fails to bind with "only one usage of each socket address", yet the old one still answers `/health`, so a health check can pass while your new code is not the one running. Check what is listening first.
 - **Building the deps once at startup.** Every turn would then share one `retrieved` dict.
 
+### Step 16 — Live verification against the client brief (`scripts/ask.py`)
+
+**Goal.** Run the 10 brief questions, plus a vague one and an out-of-corpus one, through the whole agent against the real model and database, and record what happens in [docs/live_verification.md](docs/live_verification.md).
+
+**Why.** Unit tests prove the rules. Only live runs show whether the model follows them and whether retrieval is good enough. This is where the real problems showed up.
+
+**Prompt the AI.**
+
+> Extend `scripts/ask.py` so it can read questions from a file (`--file`, one per line) and ask each one with no earlier conversation (`--independent`), and print how long each took. Put the 10 brief questions plus "How are they doing?" and a question about a company outside the corpus in `scripts/brief_questions.txt`. Run them, check each answer's citations, and write a results table in `docs/`. Log why the grounding validator rejects an answer. Feed failures back into the instructions or tools. Note which brief questions assume five companies while the corpus has eight.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `scripts/ask.py` | `--file`, `--independent`, timing |
+| `scripts/brief_questions.txt` | The 12 questions |
+| `docs/live_verification.md` | The results table, findings, fixes and open problems |
+| `app/assistant/agent.py` | Logs `answer_not_grounded` with the validator's problems |
+
+**Verify.**
+
+```bash
+cd backend
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+```
+
+This costs a few cents per question and takes a few minutes. Expect it to vary from run to run.
+
+What the first runs showed (details in `docs/live_verification.md`):
+
+- The vague question and the Netflix question both passed: the first asked which company, the second said Netflix is not in the corpus.
+- No answer reached the user with a chunk the tools had not returned.
+- Questions 2, 4, 8 and 10 sometimes ended in "could not answer", and question 10 (the required refusal to infer that AI improved margins) never produced an answer in the runs after the log was added.
+- Questions 6 and 9 need more tool calls than the cap allowed. The cap went from 15 to 25.
+- Question 6 says "the five companies", but the corpus has eight.
+
+**Check your understanding.**
+
+- *Why log the validator's problems?* A failed question used to say only "output retries exceeded". With the reasons logged, the cause was visible: invented or garbled chunk ids, one marker used for two chunks, and listed citations the text never uses.
+- *Why does the bot refuse so often on the biggest answers?* A long answer has many citations, and each is a 36-character id the model must copy exactly. One retry is not enough when a few are wrong.
+- *Why did the answers still have raw chunk ids and grouped markers?* The validator only checks that markers and citations agree. The format is asked for in the prompt, not enforced in code.
+
+**Common mistakes.**
+
+- **Judging one run.** The same question answered in one run and failed in the next. Repeat the runs that fail before deciding what is wrong.
+- **Treating "no answer" as a pass because nothing was invented.** It is the safe failure, but a question 10 that never answers has not shown that the bot refuses correctly.
+- **Changing the prompt and calling it fixed.** The instruction changes helped little. The likely fixes are in code: short per-turn ids instead of UUIDs, and format checks in the validator.
+- **Running the whole brief as one conversation.** Later questions then see the earlier ones. Use `--independent`.
+
+### Step 17 — Short source ids, and enforce the answer format in code
+
+**Goal.** The model cites passages by short ids (`S1`, `S2`...), never UUIDs. A validator rule rejects badly formatted answers, and the prompt shows a good and a bad example. Question 10 (do not infer that AI improved margins) is checked live.
+
+**Why.** Step 16 showed the main reasons for refusals: the model garbled 36-character ids in long answers, and the format asked for in the prompt (markers next to each claim, no ids or source lists in the text) was not followed. A program can check the format; a prompt can only ask.
+
+**Prompt the AI.**
+
+> Replace chunk ids with short per-turn ids. `DocumentAgentDeps` gets `labels` (chunk id to `S1`...), `label_for` and `chunk_id_for`. Tools show `[source_id=S1]`, and `read_chunk` and `read_surrounding_chunks` take a `source_id` and send the model back to retry on an unknown one. `Citation` has `source_id`, not `chunk_id`. The validator maps ids through `labels`. Add validator rule 5 (format): no id in the answer text, no block of six or more markers, no sentence repeated, at most 20 citations, and no paragraph that states a figure (`$`, `%`, `201,183`, `5 billion`) without a marker. Put a good and a bad example in the instructions. Make the number of output retries a setting. Unit tests for every rule; then re-run the brief live.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/deps.py` | `labels`, `label_for`, `chunk_id_for` |
+| `app/assistant/tools.py` | `[source_id=S1]` headers; read tools take a `source_id` |
+| `app/assistant/outputs.py` | `Citation.source_id` |
+| `app/grounding/validator.py` | Rule 5: `format_problems`, `MAX_CITATIONS` |
+| `app/assistant/instructions.md` | The example, and "a marker is not a source id" |
+| `app/config.py` | `agent_output_retries` (2) |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 163 passed
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+```
+
+Live results are in `docs/live_verification.md` (round 2). Step 18 then moves the numbering of markers out of the model. In short: no invented ids in any run; three to six answers out of ten refused; Question 10 gave the right refusal when it answered.
+
+**Check your understanding.**
+
+- *Why short ids?* A model copies "S14" reliably and a 36-character UUID unreliably. The mapping stays in the program, so the model cannot write a real-looking UUID that is wrong.
+- *Why put the format in the validator and not only the prompt?* The prompt got ignored (raw ids, a block of markers at the end). A rule in code rejects the answer and tells the model exactly what to fix.
+- *Why did a new rule produce a new failure?* "No block of markers" made the model repeat one sentence once per source. Rules push a model toward whatever still passes, so they need to be checked live and then tightened.
+- *Is a refusal good?* It is the safe failure. But a refusal rate of three to six in ten means the product is not ready; the open items in the results doc are about bringing it down.
+
+**Common mistakes.**
+
+- **Short ids that look like marker numbers.** With `S14` and `[14]` the model wrote `[14]` meaning source `S14`. Tell it plainly that markers count 1, 2, 3 in order of use and are not ids.
+- **Reading a pass as success.** The 64-copies answer for Question 10 passed validation. Read the answers, not only the counts.
+- **A rule that is too strict.** Four markers in a row refused honest answers about a five-year trend. The limit is six.
+- **Testing with the default retry count.** Tests that script exactly one retry must set `agent_output_retries` to 1, or they break when the default changes.
+
+### Step 18 — The program numbers the markers, and a vague question is asked back
+
+**Goal.** The model marks claims with the source id (`[S3]`). The program renumbers them `[1]`, `[2]`... in order of first use and builds the citation list. A source list written into the answer is removed. A question that names no company or topic is asked back, not searched.
+
+**Why.** After Step 17 the main refusals were the model numbering its own markers wrongly (`[14]` for source `S14`) and a citation list that disagreed with the text. If the program does the numbering, those failures cannot happen. Fixing what can be fixed in code is cheaper and more reliable than asking the model again.
+
+**Prompt the AI.**
+
+> Split the answer type in two. `ModelAnswer` (the agent's output) has only `answer`, with `[S3]`-style markers, and `enough_evidence`. `GroundedAnswer` extends it with `citations`. Add `ground(answer, retrieved, labels)` to the validator: remove a source list the model wrote into the text, reject numbered markers such as `[1]` with an instruction to use `[S3]`, expand `[S3, S5]` into `[S3][S5]`, number the markers in order of first use, build the citations, then run every existing rule. The agent's output validator and `answer_question` both call `ground`. Rewrite the instructions for `[S3]` markers, with a good and a bad example, and add a first rule: if the question names no company and no topic, do not search; ask which company, topic and year. Run the brief live, read the rejection reasons from the log, and tune rules that are too strict.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/outputs.py` | `ModelAnswer` (what the model writes), `GroundedAnswer` (checked and numbered) |
+| `app/grounding/validator.py` | `ground`, `tidy`; markers `SOURCE_MARKER`, `SOURCE_GROUP`; `MAX_CITATIONS = 40` |
+| `app/assistant/agent.py` | Output type `ModelAnswer`; validator and `answer_question` call `ground` |
+| `app/assistant/instructions.md` | `[S3]` format, example, and "check the question first" |
+| `tests/grounding/test_validator.py` | Numbering order, group expansion, source list removed, unknown id, numbered markers rejected |
+| `tests/assistant/test_agent.py` | The program numbers the markers; a model that numbers its own is told how to cite |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 173 passed
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+uv run python scripts/ask.py --independent "How are they doing?" "Any news?"   # no search, asks which company
+```
+
+Live results are in `docs/live_verification.md` (round 3): seven to ten of ten questions answered over five runs, no invented ids, no marker mismatches, and Question 10 refuses to infer a link between generative AI and margins.
+
+**Check your understanding.**
+
+- *Why can the program number the markers when the model cannot?* Numbering needs one pass over the text in order of first use, which is trivial for a program and error-prone for a model that must also write the answer.
+- *Why remove a source list instead of refusing the answer?* The answer is fine apart from the list, and the app shows the sources itself. Refusing would cost the user an answer for nothing.
+- *Why did the vague-question test start failing?* More text in the instructions diluted the rule, so the model began "helpfully" summarising all eight companies. A rule that matters needs to be stated first and plainly, and re-tested after the prompt changes.
+- *Why look at the rejection reasons, not the pass rate?* The counts said "7 of 10". The reasons said which two rules were too strict, which was something to change.
+
+**Common mistakes.**
+
+- **Treating a high pass rate as done.** One run said 10 of 10 while the vague question was wrong. Check every behaviour, not the total.
+- **Making a rule stricter without reading what it rejects.** A dump limit of six refused honest trends; ten was still the largest reason. Read examples before tuning.
+- **Counting on one run.** Answers vary a lot; the same question passed and failed on consecutive runs.
+- **Trusting `enough_evidence`.** A correct "the filings do not prove this" answer for Question 10 came back with `enough_evidence=True`.
+
 ---
 
 ## Roadmap
@@ -1145,6 +1285,9 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 11 | PydanticAI document agent: agent, grounding retry, usage caps | **Written (Part 5, Step 12)** |
 | 11 | Chat turn runs the agent and streams its sources | **Written (Part 5, Step 13)** |
 | 11 | Agent wired into the app (lifespan, dependencies, Windows event loop) | **Written (Part 5, Step 15)** |
+| 11 | Live run of the client brief questions, results in `docs/live_verification.md` | **Written (Part 5, Step 16)** |
+| 11 | Short source ids and format enforced in code | **Written (Part 5, Step 17)** |
+| 11 | The program numbers the markers; a vague question is asked back | **Written (Part 5, Step 18); about 7 to 10 of 10 brief questions answered, open items in the results doc** |
 | 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
 | 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
 | 13 | Final UI: citations, source passages, errors | Planned |

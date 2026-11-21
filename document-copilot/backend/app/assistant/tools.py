@@ -5,7 +5,7 @@ schema the model sees (a `Literal` becomes a fixed list of allowed values), and 
 docstring becomes the description, so the wording matters. The model can only read
 through these tools; it never writes SQL.
 
-Every chunk a tool shows the model is recorded in `deps.retrieved`. That record is what
+Every chunk a tool shows the model is recorded in `deps.retrieved` and given a short id (S1, S2...). That record is what
 the grounding validator checks citations against, so the model cannot cite what no tool
 returned.
 """
@@ -28,20 +28,18 @@ Ticker = Literal["AAPL", "AMZN", "GOOGL", "JPM", "META", "MSFT", "NVDA", "TSLA"]
 MAX_WINDOW = 3  # chunks each side that read_surrounding_chunks may return (keeps replies small)
 
 
-def format_chunk(hit: ChunkHit) -> str:
-    """One passage as the model sees it: a header with its id and source, then the text."""
+def format_chunk(source_id: str, hit: ChunkHit) -> str:
+    """One passage as the model sees it: a header with its short id and source, then the text."""
     header = (
-        f"[chunk_id={hit.id}] {hit.ticker} {hit.form} fiscal {hit.fiscal_year} "
+        f"[source_id={source_id}] {hit.ticker} {hit.form} fiscal {hit.fiscal_year} "
         f"(filed {hit.filing_date}), section: {hit.section or 'n/a'}"
     )
     return f"{header}\n{hit.content}"
 
 
 def present(ctx: RunContext[DocumentAgentDeps], hits: list[ChunkHit]) -> str:
-    """Record the chunks as retrieved this turn, then format them for the model."""
-    for hit in hits:
-        ctx.deps.retrieved[hit.id] = hit
-    return "\n\n---\n\n".join(format_chunk(hit) for hit in hits)
+    """Record the chunks as retrieved this turn (giving each a short id), then format them for the model."""
+    return "\n\n---\n\n".join(format_chunk(ctx.deps.label_for(hit), hit) for hit in hits)
 
 
 async def search_filings(
@@ -52,7 +50,7 @@ async def search_filings(
 ) -> str:
     """Search the 10-K filings and return the best matching passages, most relevant first.
 
-    Each passage starts with its chunk_id: cite passages only by that id. Search one company
+    Each passage starts with its source_id (like S1): cite passages only by that id. Search one company
     at a time for comparisons. If nothing relevant comes back, try different words or drop
     a filter before concluding the filings do not say it.
 
@@ -76,22 +74,28 @@ async def search_filings(
     return present(ctx, [passage.hit for passage in passages])
 
 
-async def read_chunk(ctx: RunContext[DocumentAgentDeps], chunk_id: UUID) -> str:
-    """Read one passage again in full, by its chunk_id from an earlier result.
+def resolve(ctx: RunContext[DocumentAgentDeps], source_id: str) -> UUID:
+    """The chunk id behind a short id the model typed, or send the model back to try again."""
+    chunk_id = ctx.deps.chunk_id_for(source_id)
+    if chunk_id is None:
+        # ModelRetry sends this message back to the model so it can correct itself.
+        raise ModelRetry(f"No passage has source_id {source_id}. Use a source_id from a search result, like S1.")
+    return chunk_id
+
+
+async def read_chunk(ctx: RunContext[DocumentAgentDeps], source_id: str) -> str:
+    """Read one passage again in full, by its source_id from an earlier result.
 
     Args:
-        chunk_id: The chunk_id of a passage returned by a search.
+        source_id: The source_id of a passage returned by a search (for example "S2").
     """
-    hit = await queries.get_chunk_by_id(ctx.deps.engine, chunk_id)
-    if hit is None:
-        # ModelRetry sends this message back to the model so it can correct itself.
-        raise ModelRetry(f"No passage has chunk_id {chunk_id}. Use a chunk_id from a search result.")
+    hit = await queries.get_chunk_by_id(ctx.deps.engine, resolve(ctx, source_id))
     return present(ctx, [hit])
 
 
 async def read_surrounding_chunks(
     ctx: RunContext[DocumentAgentDeps],
-    chunk_id: UUID,
+    source_id: str,
     window: Annotated[int, Field(ge=1, le=MAX_WINDOW)] = 1,
 ) -> str:
     """Read the passages just before and after one passage, in reading order, plus the passage itself.
@@ -99,12 +103,10 @@ async def read_surrounding_chunks(
     Use this when a result looks cut off, for example a table or explanation that continues.
 
     Args:
-        chunk_id: The chunk_id of the passage to read around.
+        source_id: The source_id of the passage to read around (for example "S2").
         window: How many passages to read on each side (1 to 3).
     """
-    centre = await queries.get_chunk_by_id(ctx.deps.engine, chunk_id)
-    if centre is None:
-        raise ModelRetry(f"No passage has chunk_id {chunk_id}. Use a chunk_id from a search result.")
+    centre = await queries.get_chunk_by_id(ctx.deps.engine, resolve(ctx, source_id))
     wanted = {
         (centre.document_id, index)
         for index in range(max(0, centre.chunk_index - window), centre.chunk_index + window + 1)

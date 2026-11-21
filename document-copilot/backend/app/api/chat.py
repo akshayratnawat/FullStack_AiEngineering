@@ -12,7 +12,7 @@ from pydantic_ai import Agent
 from supabase import AsyncClient
 
 from app.assistant.deps import DocumentAgentDeps
-from app.assistant.outputs import GroundedAnswer
+from app.assistant.outputs import ModelAnswer
 from app.auth.dependencies import CurrentUser, get_current_user
 from app.chat.messages import ChatStreamRequest, new_user_text, to_ui_message
 from app.chat.orchestrator import run_turn
@@ -55,7 +55,7 @@ async def get_chat_store(
         await user_client.postgrest.aclose()
 
 
-def get_agent(request: Request) -> Agent[DocumentAgentDeps, GroundedAnswer]:
+def get_agent(request: Request) -> Agent[DocumentAgentDeps, ModelAnswer]:
     # Built once at startup (see main.py lifespan): the agent holds no per-user state.
     return request.app.state.agent
 
@@ -71,7 +71,7 @@ def get_agent_deps(request: Request) -> DocumentAgentDeps:
 
 CurrentUserDep = Annotated[CurrentUser, Depends(get_current_user)]
 StoreDep = Annotated[ChatStore, Depends(get_chat_store)]
-AgentDep = Annotated[Agent[DocumentAgentDeps, GroundedAnswer], Depends(get_agent)]
+AgentDep = Annotated[Agent[DocumentAgentDeps, ModelAnswer], Depends(get_agent)]
 AgentDepsDep = Annotated[DocumentAgentDeps, Depends(get_agent_deps)]
 
 

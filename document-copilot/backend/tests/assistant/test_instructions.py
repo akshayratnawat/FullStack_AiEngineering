@@ -28,10 +28,11 @@ def test_every_company_in_the_corpus_is_listed(text, ticker):
     "phrase",
     [
         "enough_evidence",  # the evidence flag the validator checks
-        "chunk_id",  # the only thing that may be cited
+        "source_id",  # the only thing that may be cited
         "investment advice",  # the out-of-scope rule
         "Do not infer beyond the text",  # brief question 10
         "search each company",  # comparisons need per-company searches
+        "Check the question first",  # a vague question is asked back, not searched
         "fiscal",  # fiscal-year guidance
     ],
 )

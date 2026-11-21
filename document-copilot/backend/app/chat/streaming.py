@@ -30,8 +30,12 @@ async def ui_message_stream(
     text_chunks: AsyncIterator[str],
     on_complete: Callable[[str], Awaitable[None]],
     error_text: str = "Something went wrong. Please try again.",
+    data_parts: list[dict] | None = None,
 ) -> AsyncIterator[str]:
     """Streams `text_chunks` as one assistant message.
+
+    `data_parts` are extra parts such as `{"type": "data-citations", "data": [...]}`. The
+    list is read after the last text chunk, so the caller can fill it while the text streams.
 
     `on_complete` gets the full text once every chunk has been sent, and runs before
     the closing `finish` event. If it fails, the client receives an error event
@@ -45,6 +49,8 @@ async def ui_message_stream(
         full_text.append(piece)
         yield sse({"type": "text-delta", "id": text_id, "delta": piece})
     yield sse({"type": "text-end", "id": text_id})
+    for part in data_parts or []:
+        yield sse(part)
     try:
         await on_complete("".join(full_text))
     except Exception:

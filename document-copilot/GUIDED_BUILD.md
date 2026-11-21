@@ -901,6 +901,141 @@ Live, against the full corpus: "What was Apple's iPhone net sales revenue?" (tic
 - **Searching all companies at once.** A question like "which company had supply-chain risk?" with no ticker returned only JPMorgan risk-management sections: the query matched "risk", and JPM has several times more chunks than the others. Filter by ticker, or search each company separately and compare.
 - **Putting `-` or `&` characters from user text into a text-search query.** Always build the query from sanitised words, never from raw input.
 
+## Part 5 — The document agent (backend)
+
+### Step 11 — The agent's tools (`app/assistant/tools.py`)
+
+**Goal.** Three bounded tools the agent can call to read the filings: `search_filings(query, ticker, fiscal_year)`, `read_chunk(chunk_id)` and `read_surrounding_chunks(chunk_id, window)`. Every passage a tool returns is recorded in `deps.retrieved`.
+
+**Why.** The model can only read through these tools, so it cannot invent SQL. Recording what was returned makes citation checking exact: later, a citation is accepted only if its chunk id was actually shown to the model this turn.
+
+**Prompt the AI.**
+
+> Add `app/assistant/tools.py` with three PydanticAI tools. `search_filings` wraps `retrieve()` (with `neighbor_window=0`) and takes `ticker` as a `Literal` of the 8 tickers, so a made-up company is rejected before the database. `read_chunk` and `read_surrounding_chunks` (window 1 to 3) reuse `queries.get_chunks`, plus one new query `get_chunk_by_id` in `app/retrieval/queries.py`. Each tool returns numbered passages with the chunk id and filing metadata (ticker, form, fiscal year, filing date, section), and records every returned chunk in `ctx.deps.retrieved`. An unknown chunk id raises `ModelRetry` so the model can correct itself. Unit tests with a faked retriever and faked queries; no database, model or network.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/deps.py` | `DocumentAgentDeps`: the engine, the embedding client, and the per-turn `retrieved` dict |
+| `app/assistant/tools.py` | `search_filings`, `read_chunk`, `read_surrounding_chunks`, `Ticker`, `MAX_WINDOW = 3` |
+| `app/retrieval/queries.py` | New `get_chunk_by_id` |
+| `tests/assistant/test_tools.py` | Filters passed through, `retrieved` filled, unknown id retried, ticker enum, window bounds |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/assistant/test_tools.py tests/retrieval/test_queries.py -q   # 17 passed
+uv run ruff check app tests
+```
+
+The bad-ticker check asserts that the tool's schema lists exactly the 8 tickers; PydanticAI enforces that list when the model calls the tool, so the test does not call the tool with a bad value.
+
+**Check your understanding.**
+
+- *Why record chunks in `deps.retrieved`?* The grounding validator will accept a citation only if its chunk id is in that dict. The model cannot cite a passage no tool showed it.
+- *Why is `retrieved` created fresh each turn?* One turn's evidence must not leak into the next, or an old chunk could justify a new answer.
+- *Why `neighbor_window=0` in search?* Search replies stay small. The model asks for surrounding text with `read_surrounding_chunks` only when a result looks cut off.
+- *Why `ModelRetry` for an unknown id, not an error?* The message goes back to the model, which can then use an id from a search result instead of the whole run failing.
+
+**Common mistakes.**
+
+- **Letting tools hit the database with free-form input.** Keep the parameters typed and bounded (`Literal` ticker, `window` between 1 and 3).
+- **Returning text without recording it.** A tool that skips `present()` shows the model a passage that the validator will later refuse to accept as a citation.
+- **Clamping the window start.** Near the start of a document, `chunk_index - window` goes negative; the range starts at 0.
+
+### Step 12 — The agent (`app/assistant/agent.py`)
+
+**Goal.** `create_agent()` returns a PydanticAI agent that searches with the three tools and must answer as a `GroundedAnswer`. `answer_question()` runs one question and returns the answer with the passages it cites.
+
+**Why.** A retry is cheap and fixes most citation slips, so the model gets one chance to repair its citations before the question is refused. Per-question caps keep cost and runaway tool loops predictable.
+
+**Prompt the AI.**
+
+> Add `app/assistant/agent.py`. `create_agent(model=None)` builds `Agent(model, deps_type=DocumentAgentDeps, output_type=GroundedAnswer, instructions=<instructions.md>, tools=[the three tools], retries={"output": 1, "tools": 1})`. Add an output validator that calls `grounding.validator.validate` against `ctx.deps.retrieved` and turns a `GroundingError` into `ModelRetry` with its message. `answer_question(agent, deps, question, history)` runs the agent with `UsageLimits` (model requests, tool calls, total tokens, all from settings) and returns the answer plus the cited `SourcePassage`s. Tests use PydanticAI's `FunctionModel` with a scripted model and a faked retriever, and must test the grounding contract, not only the plumbing.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/agent.py` | `create_agent`, the grounding output validator, `answer_question` with usage limits |
+| `app/assistant/instructions.md` | The product contract sent to the model on every turn |
+| `tests/assistant/test_agent.py` | The grounding contract and the caps, with a scripted fake model |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/assistant -q       # 43 passed
+uv run ruff check app tests
+```
+
+The tests cover: a grounded answer passes and carries its passages; an honest "not enough evidence" answer passes without citations; an uncited answer is retried once and accepted when fixed (and the retry message names the problem); an invented chunk id is rejected after exactly one retry; citing without ever searching is rejected; the model is sent the instructions and exactly the three tools; a model that searches forever is stopped by the tool-call cap.
+
+**Check your understanding.**
+
+- *Why validate in code, not trust the prompt?* The prompt asks for honest citations; the validator proves them. It compares each cited chunk id with what the tools returned this turn, whatever the model says.
+- *Why does the retry message list every broken rule?* So one retry can fix them all.
+- *Why a cap on tool calls?* A model can loop on searches. The cap ends it with `UsageLimitExceeded`, which the chat layer turns into a "try a narrower question" reply.
+- *Why `FunctionModel`, not a real model?* The tests must run with no network and still exercise the retry behaviour, which needs a model that returns scripted, deliberately bad answers.
+
+**Common mistakes.**
+
+- **Testing only that the agent runs.** A fake model that always answers well proves nothing about grounding. Script a bad answer and assert it is retried and then rejected.
+- **Letting history supply evidence.** Earlier answers carry no chunk ids, so they give context only. The agent must search again to cite.
+
+### Step 13 — Run the agent in the chat turn, and stream its sources (`app/chat/orchestrator.py`)
+
+**Goal.** `run_turn` loads the thread's history, runs the agent, streams the validated answer a word at a time, then sends a `data-citations` part carrying the sources, and saves the exchange before `finish`.
+
+**Why.** This is the only place the chat flow changes: the stubbed reply is replaced by the agent. Streaming the sources lets the UI show the exact passage behind each `[n]` marker, and saving them means a reloaded thread shows the same sources.
+
+**Prompt the AI.**
+
+> In `app/chat/orchestrator.py`, replace the stubbed reply with `answer_question`. Stream the answer text as today, then send a `data-citations` data part: one entry per citation with its `[n]` marker and the passage (ticker, form, fiscal year, filing date, accession number, section, exact excerpt). Save the same part in the assistant message's `parts`. Keep the title logic and the rule that the turn is saved before `finish`. A grounding failure or a cap hit streams a plain explanation, saved with a `data-turn-failed` marker so the question stays in the thread but out of later history. A service failure sends an `error` event and saves nothing. Send no citations part when there are no sources. Tests with a fake agent run.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/chat/orchestrator.py` | `run_turn`: history, agent, stream, citations, save |
+| `app/chat/streaming.py` | `ui_message_stream` takes `data_parts`, sent after `text-end` and before the save |
+| `app/chat/messages.py` | `citation_parts` and `CITATIONS_PART_TYPE = "data-citations"`; `to_model_history` turns stored messages into the agent's context |
+| `app/api/chat.py` | `get_agent` (shared) and `get_agent_deps` (fresh per request, so `retrieved` starts empty) passed into `run_turn` |
+| `app/main.py` | The lifespan builds the search engine, embedding client and agent once, and disposes the engine on shutdown |
+| `app/config.py` | `agent_max_tool_calls` (15), `agent_max_model_requests` (20), `agent_max_total_tokens` (500,000), `agent_history_messages` (10) |
+| `app/assistant/instructions.md` | New section: earlier messages are context only and cannot be cited; markers restart at `[1]` each answer |
+| `scripts/ask.py` | Chat with the agent in the terminal and see the sources behind each answer (real model and database, nothing saved) |
+
+The stream for a cited answer is: `start`, `text-start`, `text-delta` (many), `text-end`, `data-citations`, then the save, then `finish` and `[DONE]`.
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 137 passed
+uv run ruff check app tests
+```
+
+New tests: a cited answer streams `data-citations` between `text-end` and `finish`, with the marker and exact excerpt; the saved parts are the text plus the same citations part that was streamed; an answer with no sources sends and saves no citations part; a grounding failure sends no sources; `ui_message_stream` orders data parts before the save.
+
+**Check your understanding.**
+
+- *Why are the sources sent after the text?* The passages are known only once the agent has finished and the answer is validated, so there is nothing to send while the text streams.
+- *Why does a grounding failure save an explanation, not nothing?* The user's question stays in the thread and nothing unsupported is shown. A service failure is different: it is not the question's fault, so nothing is saved and the user simply retries.
+- *Why the `data-turn-failed` marker?* Without it, the explanation would be replayed to the model as if it were an earlier answer.
+- *Why keep the excerpt in the saved part?* It is the text as it was when cited, so the thread stays correct even if a filing is re-ingested later.
+
+**Common mistakes.**
+
+- **Sharing one `DocumentAgentDeps` across requests.** The agent, engine and client are built once, but the deps (and their `retrieved` dict) are made per request. Otherwise one user's evidence could justify another user's citation.
+- **Replaying failed exchanges as history.** `to_model_history` drops a failed question and its explanation as a pair, and starts and ends the history on a user and an assistant message.
+- **Dropping the passages the agent returns.** The first version of this step discarded them, so the answer streamed with `[1]` markers and no way to see what `[1]` was.
+- **Sending an empty citations part.** An answer that cites nothing should have no `data-citations` part at all.
+- **Saving after `finish`.** The client would show a message that was never stored.
+- **Frontend not yet updated.** The UI ignores unknown `data-` parts, so nothing breaks, but the sources do not show until the citations step is added to the chat UI.
+
 ---
 
 ## Roadmap
@@ -924,7 +1059,10 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 8 | Ingestion: Markdown, chunking, embeddings | **Written (Part 4, Step 9)** |
 | 9 | Semantic search (pgvector) | **Written (Part 4, Step 10)** |
 | 10 | Keyword search + Reciprocal Rank Fusion | **Written (Part 4, Step 10)** |
-| 11 | PydanticAI document agent | Planned |
+| 11 | PydanticAI document agent: tools | **Written (Part 5, Step 11)** |
+| 11 | PydanticAI document agent: agent, grounding retry, usage caps | **Written (Part 5, Step 12)** |
+| 11 | Chat turn runs the agent and streams its sources | **Written (Part 5, Step 13)** |
+| 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
 | 12 | Citation validation and grounding | Planned |
 | 13 | Final UI: citations, source passages, errors | Planned |
 | — | Evaluation set, then deploy on Railway | Planned |

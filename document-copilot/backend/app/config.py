@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     # Comma-separated browser origins allowed to call the API (CORS).
     allowed_origins: str = "http://localhost:5173"
 
+    # --- Agent: hard caps for ONE question, so a confused or looping model cannot run up a
+    # bill. A comparison across 4 companies needs roughly 8-10 tool calls. These are first
+    # guesses; tune them after the live question run. ---
+    agent_max_tool_calls: int = Field(default=15, ge=1)  # searches + reads per question
+    agent_max_model_requests: int = Field(default=20, ge=1)  # round trips to the chat model
+    # Counts every request's full context again, so it grows fast: 15 searches of ~5k tokens each.
+    agent_max_total_tokens: int = Field(default=500_000, ge=1)
+
+    # How many of the thread's most recent stored messages (questions and answers together)
+    # the agent sees as context, so follow-ups like "and for 2023?" make sense. 0 = none.
+    agent_history_messages: int = Field(default=10, ge=0)
+
     # --- Retrieval (see app/retrieval/README.md). Each can be overridden by an env var,
     # e.g. RETRIEVAL_TOP_K=10. ---
     retrieval_top_k: int = Field(default=8, ge=1)  # passages returned after fusion

@@ -42,6 +42,23 @@ def test_one_message_is_start_text_finish_done_in_order():
     ]
 
 
+def test_data_parts_are_sent_after_the_text_and_before_the_save_and_finish():
+    order: list[str] = []
+    parts = [{"type": "data-citations", "data": [{"marker": 1}]}]
+
+    async def on_complete(_: str) -> None:
+        order.append("saved")
+
+    async def run() -> None:
+        async for event in ui_message_stream("m1", pieces("a"), on_complete, data_parts=parts):
+            chunk = parse([event])[0]
+            order.append(chunk["type"] if isinstance(chunk, dict) else "done")
+
+    asyncio.run(run())
+
+    assert order == ["start", "text-start", "text-delta", "text-end", "data-citations", "saved", "finish", "done"]
+
+
 def test_on_complete_gets_the_full_text_after_the_last_delta_and_before_finish():
     order: list[str] = []
 

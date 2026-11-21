@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from app.assistant.outputs import GroundedAnswer
 from app.auth.dependencies import CurrentUser
 from app.chat import orchestrator
 
@@ -58,5 +59,22 @@ def store() -> FakeStore:
 
 
 @pytest.fixture(autouse=True)
-def no_stub_delay(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(orchestrator, "STUB_WORD_DELAY_SECONDS", 0)
+def no_stream_delay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the typing-effect pause between streamed words."""
+    monkeypatch.setattr(orchestrator, "STREAM_WORD_DELAY_SECONDS", 0)
+
+
+@pytest.fixture(autouse=True)
+def canned_agent(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
+    """Replace the real agent run with a canned reply; returns a log of the calls it received.
+
+    A test that needs a failure or a different answer patches `orchestrator.answer_question` itself.
+    """
+    calls: list[dict] = []
+
+    async def canned(agent, deps, question, history=None):
+        calls.append({"question": question, "history": history})
+        return GroundedAnswer(answer=f"A grounded reply to: {question}", enough_evidence=False), []
+
+    monkeypatch.setattr(orchestrator, "answer_question", canned)
+    return calls

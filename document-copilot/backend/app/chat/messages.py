@@ -2,15 +2,29 @@
 
 An AI SDK "UI message" looks like
 `{"id": "...", "role": "user", "parts": [{"type": "text", "text": "Hello"}]}`.
-Only text parts exist so far; citation parts arrive with retrieval.
+Assistant messages have a text part, plus a `data-citations` part when the answer cites sources.
 """
 
 from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    UserPromptPart,
+)
+
+from app.assistant.outputs import GroundedAnswer, SourcePassage
 
 TITLE_MAX_CHARS = 60
+# Marks an assistant message that is only an explanation of why no answer was given. The UI
+# ignores unknown "data-" parts; we use it to keep such exchanges out of the agent's history.
+FAILED_PART_TYPE = "data-turn-failed"
+# Carries the sources behind an answer's [n] markers; streamed after the text and saved with it.
+CITATIONS_PART_TYPE = "data-citations"
 
 
 class UiMessage(BaseModel):
@@ -30,6 +44,57 @@ class ChatStreamRequest(BaseModel):
 
 def text_parts(text: str) -> list[dict]:
     return [{"type": "text", "text": text}]
+
+
+def citation_parts(answer: GroundedAnswer, passages: list[SourcePassage]) -> list[dict]:
+    """The data part that carries an answer's sources, or nothing when it cites none.
+
+    `passages` come from `validate()` in marker order, so they pair up with the citations
+    sorted by marker. Each entry is the passage plus the [n] marker it belongs to.
+    """
+    if not passages:
+        return []
+    markers = sorted(citation.marker for citation in answer.citations)
+    sources = [{"marker": marker, **passage.model_dump(mode="json")} for marker, passage in zip(markers, passages)]
+    return [{"type": CITATIONS_PART_TYPE, "data": sources}]
+
+
+def failed_parts(text: str) -> list[dict]:
+    """Parts for an assistant message that explains why no answer was given."""
+    return [*text_parts(text), {"type": FAILED_PART_TYPE, "data": {}}]
+
+
+def to_model_history(rows: list[dict], limit: int) -> list[ModelMessage]:
+    """The thread's earlier messages as the agent's conversation history.
+
+    `rows` are stored chat_messages in order, oldest first. Only the last `limit` are used.
+    Rules, so the agent sees a clean alternating conversation:
+    - a failed exchange (a question and its "could not answer" reply) is dropped as a pair;
+    - the history starts with a user message and ends with an assistant message.
+    Answers come back as plain text: they carry no chunk ids, so they can be read for
+    context but never cited. The agent has to search again for anything it wants to cite.
+    """
+    kept: list[tuple[str, str]] = []  # (role, text)
+    for row in rows:
+        failed = any(part.get("type") == FAILED_PART_TYPE for part in row["parts"] or [])
+        if row["role"] == "assistant" and failed:
+            if kept and kept[-1][0] == "user":
+                kept.pop()  # drop the question this failed reply answered
+            continue
+        kept.append((row["role"], row["content"] or message_text(row["parts"] or [])))
+
+    kept = kept[-limit:] if limit > 0 else []
+    while kept and kept[0][0] != "user":
+        kept.pop(0)
+    while kept and kept[-1][0] != "assistant":
+        kept.pop()
+
+    return [
+        ModelRequest(parts=[UserPromptPart(content=text)])
+        if role == "user"
+        else ModelResponse(parts=[TextPart(content=text)])
+        for role, text in kept
+    ]
 
 
 def message_text(parts: list[dict]) -> str:

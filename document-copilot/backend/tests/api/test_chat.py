@@ -7,7 +7,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.chat import get_chat_store, router
+from app.api.chat import get_agent, get_agent_deps, get_chat_store, router
 from app.auth.dependencies import get_current_user
 from tests.conftest import ALICE, BOB
 
@@ -19,6 +19,9 @@ def make_client(store, user=ALICE) -> TestClient:
     if user is not None:
         app.dependency_overrides[get_current_user] = lambda: user
         app.dependency_overrides[get_chat_store] = lambda: store
+        # The orchestrator's agent call is faked in conftest, so any placeholder will do.
+        app.dependency_overrides[get_agent] = lambda: object()
+        app.dependency_overrides[get_agent_deps] = lambda: object()
     return TestClient(app)
 
 

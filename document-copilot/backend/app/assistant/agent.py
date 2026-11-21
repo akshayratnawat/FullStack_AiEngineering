@@ -81,4 +81,4 @@ async def answer_question(
     )
     # The output validator has already accepted this answer; grounding it again produces the
     # numbered answer and its cited passages (in marker order) for the UI and the database.
-    return ground(result.output, deps.retrieved, deps.labels)
+    return ground(result.output, deps.retrieved, deps.labels, log=False)

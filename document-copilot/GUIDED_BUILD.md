@@ -1260,6 +1260,62 @@ Live results are in `docs/live_verification.md` (round 3): seven to ten of ten q
 
 ---
 
+## Part 6 — The trust UI (frontend)
+
+### Step 19 — Citation chips and the source panel
+
+**Goal.** Every cited answer shows its sources. Each `[n]` in the text is a button, a row of chips under the answer names each source (company, form, fiscal year, section), and clicking either opens a panel with the exact passage, the filing date, the section and the accession number.
+
+**Why.** An analyst should be able to check any claim in one click. The backend already streams a `data-citations` part after the text and saves the same part, so the frontend only has to read it. Reading it from the message parts means the sources also show after a reload.
+
+**Prompt the AI.**
+
+> In the frontend, read the `data-citations` part of an assistant message (marker, ticker, form, fiscal year, filing date, accession number, section, excerpt). Turn each `[n]` in the answer text into a button, show a row of source chips under the answer, and open a side panel with the exact excerpt when either is clicked. Mark a reply that only explains why no answer was given. No new packages, no frontend tests: verify with the type checker, the linter, the build and the browser. First check, with the installed `ai` package, that it produces the part the UI expects.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `src/lib/citations.ts` | `Source`, `sourcesOf` (reads the part), `isFailedReply`, `splitMarkers`, labels and dates |
+| `src/components/chat/AnswerText.tsx` | The answer text with each `[n]` as a button |
+| `src/components/chat/SourceChips.tsx` | The chips under an answer |
+| `src/components/chat/SourcePanel.tsx` | The side panel: filing details and the exact passage; Escape closes it |
+| `src/components/chat/MessageList.tsx` | Renders the above; "No answer given" label; "Searching the filings…" while waiting |
+| `src/components/chat/ChatSession.tsx` | Holds the selected source and shows the panel beside the chat (full screen on a phone) |
+
+**Verify.**
+
+```bash
+cd frontend
+pnpm tsc --noEmit -p tsconfig.app.json
+pnpm lint
+pnpm build
+```
+
+All three pass (lint shows one existing warning in `button.tsx`). The installed `ai` package (7.0.173) turns the backend's stream into a message with a `text` part and a `data-citations` part carrying the excerpt, which is exactly what `sourcesOf` reads. This was checked by feeding a stream to `readUIMessageStream` in a script.
+
+In the browser (not yet done; it is the open Phase 7 item): start the backend and `pnpm dev`, sign in, ask "What was Apple's iPhone net sales revenue in fiscal 2025?", then check:
+
+1. The answer has numbered buttons and chips under it.
+2. Clicking `[1]` or its chip opens the panel with the exact text from the filing.
+3. Reload the page: the buttons, chips and panel still work.
+4. Ask "How are they doing?": the reply asks which company and shows no chips.
+
+**Check your understanding.**
+
+- *Why read the part from the message and not keep a separate list?* The message is what the SDK streams and what the backend stores, so the same code shows the sources live and after a reload.
+- *Why does a marker without a source stay as plain text?* An older message or a stray number must not become a dead button.
+- *Why show the whole excerpt?* The point is to check the claim against the text, and the backend saves the excerpt as it was when cited, so it stays right even if a filing is later re-ingested.
+- *Why is the panel full screen on a phone?* A 24 rem side column does not fit beside the chat there.
+
+**Common mistakes.**
+
+- **Assuming the chunk name.** The SDK accepts any `data-` type, so `data-citations` works, but check it in the installed package whenever `ai` is upgraded.
+- **Forgetting the panel when the message is not found.** The panel looks the source up from the messages every render; if the message is gone it closes, instead of showing stale text.
+- **Unticking nothing.** Phase 7's "click a citation, see the exact passage" stays open until someone has done it in a browser.
+
+---
+
 ## Roadmap
 
 Steps still to be written into this guide, in build order (from [docs/architecture.md](docs/architecture.md)):
@@ -1290,7 +1346,7 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 11 | The program numbers the markers; a vague question is asked back | **Written (Part 5, Step 18); about 7 to 10 of 10 brief questions answered, open items in the results doc** |
 | 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
 | 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
-| 13 | Final UI: citations, source passages, errors | Planned |
+| 13 | Final UI: citations, source passages, errors | **Written (Part 6, Step 19); needs a manual browser check** |
 | — | Evaluation set, then deploy on Railway | Planned |
 
 ---

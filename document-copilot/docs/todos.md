@@ -158,7 +158,7 @@ Goal: analysts can verify every claim in one click — this is what makes the pr
 - [x] Empty states (no threads, no corpus match)
 - [x] Error states (auth expired, retrieval failure, grounding failure, network/CORS)
 - [x] Loading/streaming status during assistant run
-- [x] Verify: click a citation → see the exact passage from the filing
+- [ ] Verify: click a citation → see the exact passage from the filing (built; needs a manual check in the browser)
 
 ---
 

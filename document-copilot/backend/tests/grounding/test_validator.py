@@ -1,284 +1,394 @@
-"""Tests for grounding/validator.py: one test per rule, plus the passing cases.
+"""Tests for grounding/validator.py: the claim checks, the figure check, and where markers go.
 
-No model, database or network. The "evidence" below stands for what the search tools showed
-the model this turn: the retrieved chunks and the short id ("S1", "S2"...) each was given.
-The validator accepts a citation only if its source_id is one of those.
-
-Rules under test (numbered as in the validator's docstring):
-  1. every citation uses a source_id a tool showed this turn
-  2. each marker number is used by one citation only
-  3. text markers and citations agree both ways (3a: marker without citation,
-     3b: citation without marker)
-  4. enough_evidence=True needs at least one citation
-  5. format: no ids in the text, no block of four or more markers, no figure without a marker
+No model, database or network. The "evidence" is what the search tools showed the model this
+turn: the retrieved chunks and the short id ("S1", "S2"...) each was given. The model returns
+claims; `ground` checks each one against its cited passages and writes the answer text, with the
+marker right after each claim.
 """
 
 from uuid import uuid4
 
 import pytest
 
-from app.assistant.outputs import Citation, GroundedAnswer, ModelAnswer
-from app.grounding.validator import GroundingError, ground, validate
+from app.assistant.outputs import Claim, ModelAnswer
+from app.grounding.validator import (
+    MAX_CITATIONS,
+    MAX_NOTES,
+    Figure,
+    GroundingError,
+    figure_in_passage,
+    figures_in,
+    ground,
+    numbers_in,
+    sentence_count,
+)
 from app.retrieval.queries import ChunkHit
 
 # --- helpers -----------------------------------------------------------------
 
+APPLE_TABLE = (
+    "| Net sales by category | 2021 | Change | 2020 | Change | 2019 |\n"
+    "| iPhone (1) | 191,973 | 39% | 137,781 | (3)% | 142,381 |\n"
+    "| Services (3) | 68,425 | 27% | 53,768 | 16% | 46,291 |"
+)
 
-def chunk(text: str = "text") -> ChunkHit:
+
+def chunk(text: str = APPLE_TABLE, fiscal_year: int = 2025) -> ChunkHit:
     """A fake retrieved chunk (an Apple 10-K passage) with a fresh random id."""
     # Positional fields: chunk id, document id, chunk index, text, section,
     # ticker, form, fiscal year, filing date, accession number.
-    return ChunkHit(uuid4(), uuid4(), 1, text, "Item 7", "AAPL", "10-K", 2025, "2025-10-31", "acc")
+    return ChunkHit(uuid4(), uuid4(), 1, text, "Item 7", "AAPL", "10-K", fiscal_year, "2025-10-31", "acc")
 
 
 def evidence(*chunks: ChunkHit) -> tuple[dict, dict]:
     """What the tools showed: the retrieved chunks, and their short ids S1, S2... in order."""
-    retrieved = {c.id: c for c in chunks}
-    labels = {c.id: f"S{number}" for number, c in enumerate(chunks, start=1)}
-    return retrieved, labels
+    return {c.id: c for c in chunks}, {c.id: f"S{n}" for n, c in enumerate(chunks, start=1)}
 
 
-def answer(text: str, markers_to_sources: dict[int, str], enough: bool = True) -> GroundedAnswer:
-    """Build an answer whose citations are {marker number: the source_id it cites}."""
-    citations = [Citation(marker=m, source_id=s) for m, s in markers_to_sources.items()]
-    return GroundedAnswer(answer=text, citations=citations, enough_evidence=enough)
+def fact(text: str, *sources: str) -> Claim:
+    return Claim(kind="fact", text=text, sources=list(sources))
 
 
-def problems_of(given: GroundedAnswer, shown: tuple[dict, dict]) -> list[str]:
-    """Run the validator, expect it to reject the answer, and return the listed problems."""
+def note(text: str) -> Claim:
+    return Claim(kind="note", text=text)
+
+
+def answer(*claims: Claim, enough: bool = True) -> ModelAnswer:
+    return ModelAnswer(claims=list(claims), enough_evidence=enough)
+
+
+def problems_of(given: ModelAnswer, shown: tuple[dict, dict]) -> list[str]:
+    """Run `ground`, expect it to reject the answer, and return the listed problems."""
     with pytest.raises(GroundingError) as raised:  # the test fails if nothing is raised
-        validate(given, *shown)
+        ground(given, *shown)
     return raised.value.problems
 
 
-# --- passing cases -----------------------------------------------------------
+# --- where the markers go ----------------------------------------------------
 
 
-def test_a_grounded_answer_returns_its_passages_in_marker_order():
-    """A valid answer passes; passages come back ordered by marker, whatever order they were cited in."""
-    first, second = chunk("iPhone text"), chunk("Services text")
+def test_each_marker_sits_right_after_its_own_figure():
+    """The point of the design: a marker follows the figure it backs, never a block at the end."""
+    shown = evidence(chunk("Net sales were $209,586 million."), chunk("Net sales were $201,183 million."))
+    given = answer(
+        fact("Apple's iPhone net sales were $209,586 million in fiscal 2025", "S1"),
+        fact(", up from $201,183 million in fiscal 2024.", "S2"),
+    )
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == (
+        "Apple's iPhone net sales were $209,586 million[1] in fiscal 2025, up from $201,183 million[2] in fiscal 2024."
+    )
+
+
+def test_markers_are_numbered_in_order_of_first_use_and_the_citations_match():
+    """S2 is used first, so it becomes [1]; passages come back in marker order."""
+    first, second = chunk("iPhone text 191,973"), chunk("Services text 68,425")
     shown = evidence(first, second)  # S1 = first, S2 = second
-    # Marker 2 is listed before marker 1 on purpose, to check the ordering.
-    given = answer("Services grew [2]. iPhone fell [1].", {2: "S2", 1: "S1"})
+    given = answer(
+        fact("Services grew to $68,425 million.", "S2"),
+        fact("iPhone was $191,973 million.", "S1"),
+    )
 
-    passages = validate(given, *shown)
+    grounded, passages = ground(given, *shown)
 
-    # Marker 1 (iPhone) must come first even though it was cited second.
-    assert [p.excerpt for p in passages] == ["iPhone text", "Services text"]
-    # The passage carries the filing details the UI needs, copied from the chunk.
-    assert passages[0].ticker == "AAPL" and passages[0].chunk_id == first.id
-
-
-def test_an_honest_not_enough_evidence_answer_needs_no_citations():
-    """Saying "the filings do not say" with no citations is allowed (enough_evidence=False)."""
-    given = GroundedAnswer(answer="The filings do not say.", enough_evidence=False)
-    # Nothing was retrieved and nothing is cited: it passes and returns no passages.
-    assert validate(given, {}, {}) == []
+    assert grounded.answer == "Services grew to $68,425 million[1]. iPhone was $191,973 million[2]."
+    assert [(c.marker, c.source_id) for c in grounded.citations] == [(1, "S2"), (2, "S1")]
+    assert [p.excerpt for p in passages] == ["Services text 68,425", "iPhone text 191,973"]
+    assert passages[0].chunk_id == second.id  # the UI opens the exact passage
 
 
-def test_a_bracketed_year_is_not_a_citation_marker():
-    """A bracketed year like [2024] has four digits, so it is ordinary text, not a marker."""
-    given = answer("Revenue in [2024] rose [1].", {1: "S1"})
-    # If [2024] were read as a marker it would need a citation 2024 and be rejected.
-    assert len(validate(given, *evidence(chunk()))) == 1
+def test_a_source_used_twice_keeps_one_number():
+    shown = evidence(chunk())
+    given = answer(
+        fact("iPhone net sales were $191,973 million.", "S1"),
+        fact("Services net sales were $68,425 million.", "S1"),
+    )
+
+    grounded, passages = ground(given, *shown)
+
+    assert grounded.answer == "iPhone net sales were $191,973 million[1]. Services net sales were $68,425 million[1]."
+    assert len(passages) == 1
 
 
-def test_one_marker_per_claim_in_a_list_passes_the_format_rules():
-    """Figures that each have their own marker, in a list, are the format we want."""
-    shown = evidence(chunk(), chunk(), chunk())
-    text = "- iPhone: $209,586 million [1]\n- Mac: $33,708 million [2]\n- iPad: $28,023 million [3]"
-    assert len(validate(answer(text, {1: "S1", 2: "S2", 3: "S3"}), *shown)) == 3
+def test_a_claim_on_two_passages_gets_both_markers_before_its_full_stop():
+    shown = evidence(chunk("Customers include cloud providers."), chunk("Customer A was 13% of revenue."))
+    given = answer(fact("Large cloud providers are the main customers.", "S1", "S2"))
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == "Large cloud providers are the main customers[1][2]."
 
 
-# --- one test per rejection rule ---------------------------------------------
+def test_notes_carry_no_marker_and_list_items_keep_their_lines():
+    """Framing text has no marker; a bullet list stays a list, with a marker on each line."""
+    shown = evidence(chunk())
+    given = answer(
+        note("Here is what the filings say:"),
+        fact("\n- iPhone: $191,973 million", "S1"),
+        fact("\n- Services: $68,425 million", "S1"),
+    )
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == "Here is what the filings say:\n- iPhone: $191,973 million[1]\n- Services: $68,425 million[1]"
+
+
+def test_an_honest_not_enough_evidence_answer_needs_no_sources():
+    given = answer(note("The filings do not say."), enough=False)
+    grounded, passages = ground(given, {}, {})
+    assert grounded.answer == "The filings do not say." and grounded.citations == [] and passages == []
+
+
+# --- sources -----------------------------------------------------------------
 
 
 def test_citing_a_source_no_search_showed_is_rejected():
-    """Rule 1: a cited source_id that no tool showed was invented or remembered, not found."""
-    given = answer("A claim [1].", {1: "S9"})  # S9 was never shown
-    problems = problems_of(given, evidence(chunk()))  # only S1 exists
-    # Exactly one problem, and it names the offending id.
-    assert len(problems) == 1 and "S9" in problems[0]
+    problems = problems_of(answer(fact("iPhone was $191,973 million.", "S9")), evidence(chunk()))
+    assert len(problems) == 1 and "S9" in problems[0] and "no search returned" in problems[0]
 
 
-def test_two_citations_sharing_a_marker_are_rejected():
-    """Rule 2: [1] must mean one source, so two citations can't both be number 1."""
-    given = GroundedAnswer(
-        answer="Claim [1].",
-        # Two different sources, both numbered 1. Built by hand: `answer()` uses a dict,
-        # which cannot hold the same marker twice.
-        citations=[Citation(marker=1, source_id="S1"), Citation(marker=1, source_id="S2")],
-        enough_evidence=True,
-    )
-    assert "Marker [1] is used by more than one citation" in problems_of(given, evidence(chunk(), chunk()))[0]
+def test_a_fact_without_sources_is_rejected():
+    problems = problems_of(answer(fact("iPhone sales are large.")), evidence(chunk()))
+    assert "has no sources" in problems[0]
 
 
-def test_a_marker_in_the_text_without_a_citation_is_rejected():
-    """Rule 3a: the text says [2] but no citation 2 exists, so that claim has no source."""
-    # The text uses [1] and [2]; only citation 1 exists.
-    problems = problems_of(answer("Claim [1] and another [2].", {1: "S1"}), evidence(chunk()))
-    assert problems == ["The text uses [2] but there is no citation 2."]
+def test_more_than_eight_sources_on_one_claim_is_rejected_by_the_schema():
+    """The model cannot even return a claim with nine sources."""
+    with pytest.raises(ValueError):
+        Claim(kind="fact", text="x", sources=[f"S{n}" for n in range(1, 10)])
 
 
-def test_a_citation_never_used_in_the_text_is_rejected():
-    """Rule 3b: citation 2 is listed but nothing in the text points at it."""
-    # Two citations are listed, but the text only uses [1].
-    given = answer("Claim [1].", {1: "S1", 2: "S2"})
-    problems = problems_of(given, evidence(chunk(), chunk()))  # both sources are real
-    assert problems == ["Citation 2 is listed but [2] never appears in the answer text."]
+# --- figures -----------------------------------------------------------------
 
 
-def test_claiming_enough_evidence_without_any_citation_is_rejected():
-    """Rule 4: an answer that says it has evidence must show at least one source."""
-    # A confident answer with no sources at all: the exact failure grounding exists to stop.
-    problems = problems_of(GroundedAnswer(answer="Apple grew.", enough_evidence=True), ({}, {}))
-    assert "enough_evidence is true but there are no citations" in problems[0]
+def test_a_figure_the_cited_passage_does_not_contain_is_rejected():
+    """The correctness check: 191,974 is not in the passage, so the claim was mis-copied or invented."""
+    problems = problems_of(answer(fact("iPhone net sales were $191,974 million.", "S1")), evidence(chunk()))
+    assert len(problems) == 1 and "$191,974 million" in problems[0] and "none of its cited passages" in problems[0]
 
 
-def test_not_enough_evidence_cannot_use_markers_it_does_not_back():
-    """Rule 3a still applies to a "not enough evidence" answer: a stray [1] with no citation is rejected."""
-    # enough_evidence=False excuses having no citations, but not a dangling [1] in the text.
-    problems = problems_of(GroundedAnswer(answer="Maybe [1].", enough_evidence=False), ({}, {}))
-    assert problems == ["The text uses [1] but there is no citation 1."]
-
-
-# --- rule 5: format ----------------------------------------------------------
+def test_a_figure_that_is_in_another_passage_is_rejected_for_the_wrong_citation():
+    """The figure exists in S2 but the claim cites S1: the marker would point at the wrong filing."""
+    shown = evidence(chunk("Revenue was 100 million"), chunk("iPhone was 191,973"))
+    problems = problems_of(answer(fact("iPhone net sales were $191,973 million.", "S1")), shown)
+    assert "none of its cited passages" in problems[0]
 
 
 @pytest.mark.parametrize(
-    "leaked",
+    ("claim", "accepted"),
     [
-        "see chunk_id 123",
-        "from source_id S1",
-        "as shown in [S1]",
-        "the source is [1] S37",  # a source list written into the answer
-        "chunk 5884b293-95b8-42b6-87fb-2d00da4c0a2b says",
+        ("iPhone net sales were $191,973 million.", True),  # exact
+        ("iPhone net sales were about $192.0 billion.", True),  # 191,973 million to billions, one decimal
+        ("iPhone net sales were about $191.9 billion.", False),  # does not round from 191,973
+        ("iPhone net sales grew 39%.", True),  # a percentage in the table
+        ("iPhone net sales grew 40%.", False),
+        ("In fiscal 2021 iPhone net sales fell 3%.", True),  # "(3)%" in the table; the year is not a figure
     ],
 )
-def test_an_id_written_into_the_text_is_rejected(leaked):
-    """Rule 5: sources are shown from `citations`; an id in the answer text is noise to the analyst."""
-    given = answer(f"Apple grew [1], {leaked}.", {1: "S1"})
-    problems = problems_of(given, evidence(chunk()))
-    assert len(problems) == 1 and "contains a chunk_id, source_id or [S1]-style id" in problems[0]
+def test_figures_are_matched_exactly_or_by_unit_conversion_only(claim, accepted):
+    shown = evidence(chunk())
+    if accepted:
+        ground(answer(fact(claim, "S1")), *shown)
+    else:
+        assert "none of its cited passages" in problems_of(answer(fact(claim, "S1")), shown)[0]
 
 
-def test_a_dump_of_ten_markers_is_rejected_but_a_five_year_trend_on_five_passages_is_fine():
-    """Rule 5: a dump of markers is not a citation per claim; five passages for one trend is."""
-    shown = evidence(*[chunk() for _ in range(10)])
-    block = answer("Many things grew " + "".join(f"[{n}]" for n in range(1, 11)) + ".", {n: f"S{n}" for n in range(1, 11)})
-    assert "ten or more markers in a row" in problems_of(block, shown)[0]
-
-    trend = answer("Net sales rose every year [1][2][3][4][5].", {n: f"S{n}" for n in range(1, 6)})
-    assert len(validate(trend, *evidence(*[chunk() for _ in range(5)]))) == 5
+def test_years_and_item_numbers_are_not_figures():
+    """"fiscal 2024", "Item 7" and "10-K" are labels, so a claim with no real figure passes."""
+    given = answer(fact("In fiscal 2024 the Item 7 discussion of the 10-K covers net sales.", "S1"))
+    grounded, _ = ground(given, *evidence(chunk()))
+    assert grounded.citations[0].source_id == "S1"
 
 
-@pytest.mark.parametrize("claim", ["Sales were $5 billion.", "Margin rose 3%.", "Revenue was 201,183 million.", "Sales hit 5.2 billion."])
-def test_a_paragraph_with_a_figure_and_no_marker_is_rejected(claim):
-    """Rule 5: a figure is a factual claim, so the paragraph that states it must cite something."""
-    # The first paragraph is cited; the second states a figure with no marker.
-    given = answer(f"iPhone sold well [1].\n\n{claim}", {1: "S1"})
-    problems = problems_of(given, evidence(chunk()))
-    assert len(problems) == 1 and "states a figure but has no citation marker" in problems[0]
+def test_each_figure_gets_its_own_marker_from_the_passage_that_contains_it():
+    """Two figures from two passages in one sentence: the program puts each marker right after its figure."""
+    shown = evidence(chunk("iPhone net sales were 191,973 in 2021."), chunk("Services net sales were 68,425 in 2021."))
+    given = answer(fact("iPhone net sales were $191,973 million and Services net sales were $68,425 million.", "S1", "S2"))
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == (
+        "iPhone net sales were $191,973 million[1] and Services net sales were $68,425 million[2]."
+    )
 
 
-def test_a_paragraph_without_figures_may_go_uncited():
-    """Rule 5 only targets figures: an uncited framing sentence or a clarifying question is fine."""
-    given = answer("Here is what the filings say.\n\niPhone sales were $5 billion [1].", {1: "S1"})
-    assert len(validate(given, *evidence(chunk()))) == 1
+def test_the_model_listing_sources_in_a_different_order_does_not_move_the_markers():
+    """S2 is listed first but its figure comes second: the marker follows the figure, and numbers follow the text."""
+    shown = evidence(chunk("iPhone net sales were 191,973."), chunk("Services net sales were 68,425."))
+    given = answer(fact("iPhone net sales were $191,973 million and Services were $68,425 million.", "S2", "S1"))
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == "iPhone net sales were $191,973 million[1] and Services were $68,425 million[2]."
+    assert [(c.marker, c.source_id) for c in grounded.citations] == [(1, "S1"), (2, "S2")]
 
 
-def test_a_year_alone_is_not_a_figure():
-    """Rule 5: "fiscal 2024" is a label, not a claim, so a paragraph with only years needs no marker."""
-    given = answer("Fiscal 2024 and fiscal 2025 are compared below.\n\niPhone sold well [1].", {1: "S1"})
-    assert len(validate(given, *evidence(chunk()))) == 1
+def test_figures_from_one_passage_that_are_far_apart_each_get_a_marker():
+    """"$191,973 million in fiscal 2021 and ... $68,425 million": too far apart to share, so both are marked."""
+    given = answer(fact("iPhone net sales were $191,973 million in fiscal 2021 and Services net sales were $68,425 million.", "S1"))
+    grounded, _ = ground(given, *evidence(chunk()))
+    assert grounded.answer == (
+        "iPhone net sales were $191,973 million[1] in fiscal 2021 and Services net sales were $68,425 million[1]."
+    )
 
 
-# --- reporting ---------------------------------------------------------------
+def test_a_range_from_one_passage_shares_a_single_marker():
+    shown = evidence(chunk("Capital investments of $1.10 billion to $1.30 billion are expected."))
+    grounded, _ = ground(answer(fact("NVIDIA expects $1.10 billion to $1.30 billion of capital investment.", "S1")), *shown)
+    assert grounded.answer == "NVIDIA expects $1.10 billion to $1.30 billion[1] of capital investment."
+
+
+def test_consecutive_figures_from_one_passage_share_one_marker_after_the_last():
+    given = answer(fact("iPhone net sales were $191,973 million, up 39%.", "S1"))
+    grounded, _ = ground(given, *evidence(chunk()))
+    assert grounded.answer == "iPhone net sales were $191,973 million, up 39%[1]."
+
+
+def test_a_cited_passage_with_no_figure_in_the_claim_gets_its_marker_at_the_end():
+    """The second source backs the non-numeric part, so its marker goes at the end of the claim."""
+    shown = evidence(chunk(), chunk("Apple designs its products in California."))
+    given = answer(fact("iPhone net sales were $191,973 million and Apple designs its products itself.", "S1", "S2"))
+
+    grounded, _ = ground(given, *shown)
+
+    assert grounded.answer == "iPhone net sales were $191,973 million[1] and Apple designs its products itself[2]."
+
+
+def test_when_two_cited_filings_contain_a_figure_the_year_next_to_it_picks_the_filing():
+    """191,973 is in both the fiscal 2021 filing and the 2022 one (a prior-year column): the year decides."""
+    fy2022 = chunk("2022: iPhone 205,489. 2021: iPhone 191,973.", fiscal_year=2022)
+    fy2021 = chunk("2021: iPhone 191,973.", fiscal_year=2021)
+    shown = evidence(fy2022, fy2021)  # S1 = fiscal 2022 filing, S2 = fiscal 2021 filing
+    given = answer(fact("iPhone net sales were $191,973 million in fiscal 2021.", "S1", "S2"))
+
+    grounded, passages = ground(given, *shown)
+
+    assert grounded.answer == "iPhone net sales were $191,973 million[1] in fiscal 2021."
+    assert grounded.citations[0].source_id == "S2" and passages[0].fiscal_year == 2021
+
+
+def test_a_figure_none_of_the_cited_passages_contain_is_rejected_even_if_another_passage_has_it():
+    shown = evidence(chunk("Revenue was 100."), chunk("Services were 200."), chunk("iPhone was 191,973."))
+    given = answer(fact("iPhone net sales were $191,973 million.", "S1", "S2"))  # S3 has it but is not cited
+    assert "none of its cited passages" in problems_of(given, shown)[0]
+
+
+def test_a_claim_with_too_many_figures_is_rejected():
+    figures = ", ".join(f"${n},000 million" for n in range(1, 8))
+    problems = problems_of(answer(fact(f"Sales were {figures}.", "S1")), evidence(chunk(" ".join(f"{n},000" for n in range(1, 8)))))
+    assert "Use at most 6 per claim" in problems[0]
+
+
+def test_a_calculation_must_show_an_input_from_its_sources():
+    shown = evidence(chunk())
+    ok = answer(Claim(kind="calculation", text="Services were 68,425 of 260,174, or 26%.", sources=["S1"]))
+    assert ground(ok, *shown)[0].answer == "Services were 68,425 of 260,174, or 26%[1]."  # 68,425 is in S1
+
+    bad = answer(Claim(kind="calculation", text="The share was 26% (1,000 / 3,846).", sources=["S1"]))
+    assert "none of its figures is in its sources" in problems_of(bad, shown)[0]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Sales were $201,183 million in fiscal 2024", [201183.0]),
+        ("Margin was 28.5% and sales $5.2 billion", [28.5, 5.2]),
+        ("Item 7 of the 10-K for fiscal 2024", []),
+        ("A drop of (3)%", [3.0]),
+    ],
+)
+def test_figures_in_a_claim(text, expected):
+    assert [figure.value for figure in figures_in(text)] == expected
+
+
+def test_numbers_in_a_passage_include_table_cells():
+    assert {191973.0, 39.0, 137781.0, 3.0}.issubset(numbers_in(APPLE_TABLE))
+
+
+def test_unit_conversion_is_limited_to_million_and_billion():
+    assert figure_in_passage(Figure(201.2, 1, "billion", "$201.2 billion"), {201183.0})
+    assert not figure_in_passage(Figure(201.3, 1, "billion", "$201.3 billion"), {201183.0})
+    assert not figure_in_passage(Figure(201.2, 1, "%", "201.2%"), {201183.0})
+
+
+# --- one claim, one sentence -------------------------------------------------
+
+
+def test_a_claim_with_two_sentences_is_rejected():
+    given = answer(fact("iPhone net sales rose. Services net sales also rose.", "S1"))
+    assert "more than one sentence" in problems_of(given, evidence(chunk()))[0]
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        ("Sales rose 7%.", 1),
+        ("U.S. net sales rose, and Apple Inc. said so.", 1),  # abbreviations do not end a sentence
+        ("Sales rose. Costs fell.", 2),
+        ("- iPhone\n- Mac", 2),
+    ],
+)
+def test_sentence_count(text, count):
+    assert sentence_count(text) == count
+
+
+# --- notes -------------------------------------------------------------------
+
+
+def test_a_note_cannot_have_sources_or_figures_or_be_long():
+    shown = evidence(chunk())
+    backed = fact("iPhone was $191,973 million.", "S1")
+    with_sources = Claim(kind="note", text="A framing sentence.", sources=["S1"])
+    assert "lists sources" in problems_of(answer(with_sources, backed), shown)[0]
+    assert "states a figure" in problems_of(answer(note("Sales were $5 billion."), backed), shown)[0]
+    assert "over 400 characters" in problems_of(answer(note("a" * 401), backed), shown)[0]
+
+
+def test_too_many_notes_in_an_answer_that_claims_evidence_are_rejected():
+    claims = [note(f"Framing sentence number {n} goes here.") for n in range(MAX_NOTES + 1)]
+    given = answer(*claims, fact("iPhone was $191,973 million.", "S1"))
+    assert f"at most {MAX_NOTES}" in problems_of(given, evidence(chunk()))[0]
+
+
+# --- ids and markers belong to the program -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "leaked", ["see [1]", "from S1 [S1]", "chunk_id 5", "5884b293-95b8-42b6-87fb-2d00da4c0a2b says"]
+)
+def test_an_id_or_marker_written_into_a_claim_is_rejected(leaked):
+    problems = problems_of(answer(fact(f"iPhone sales rose, {leaked}.", "S1")), evidence(chunk()))
+    assert "contains an id or a [1]-style marker" in problems[0]
+
+
+# --- across the answer -------------------------------------------------------
+
+
+def test_claiming_enough_evidence_with_only_notes_is_rejected():
+    problems = problems_of(answer(note("Apple grew.")), ({}, {}))
+    assert "enough_evidence is true but no claim is a fact" in problems[0]
+
+
+def test_the_same_claim_written_twice_is_rejected():
+    text = "Apple's iPhone net sales were $191,973 million in fiscal 2021."
+    given = answer(fact(text, "S1"), fact(text, "S1"))
+    assert "written more than once" in problems_of(given, evidence(chunk()))[0]
+
+
+def test_more_than_the_maximum_number_of_sources_is_rejected():
+    count = MAX_CITATIONS + 1
+    chunks = [chunk(f"Fact number {n} is {n},000 here.") for n in range(1, count + 1)]
+    claims = [fact(f"Item {n} says {n},000.", f"S{n}") for n in range(1, count + 1)]
+    problems = problems_of(answer(*claims), evidence(*chunks))
+    assert any(f"cites {count} passages" in problem for problem in problems)
 
 
 def test_every_broken_rule_is_reported_at_once_so_the_model_can_fix_them_together():
-    """All problems come back in one error, so the agent's single retry can fix them all."""
-    # The text uses [1] and [3]; citations 1 (an unknown source) and 2 (a real one) are listed.
-    given = answer("Claim [1] and [3].", {1: "S9", 2: "S1"})
-    # Three problems at once: citation 1 uses an unknown source (rule 1),
-    # [3] has no citation (rule 3a), citation 2 is never used in the text (rule 3b).
+    given = answer(
+        fact("iPhone was $191,974 million.", "S1"),  # figure not in passage
+        fact("Services grew.", "S9"),  # unknown source
+        fact("Mac grew."),  # no sources
+    )
     assert len(problems_of(given, evidence(chunk()))) == 3
-
-
-def test_the_same_sentence_repeated_once_per_source_is_rejected():
-    """Rule 5: repeating one claim with a new marker each time is padding, not citation."""
-    sentence = "Apple reports gross margin changes from product mix but does not tie them to generative AI"
-    text = " ".join(f"{sentence} [{n}]." for n in range(1, 4))
-    shown = evidence(*[chunk() for _ in range(3)])
-    problems = problems_of(answer(text, {n: f"S{n}" for n in range(1, 4)}), shown)
-    assert len(problems) == 1 and "is written more than once with different markers" in problems[0]
-
-
-def test_more_than_the_maximum_number_of_citations_is_rejected():
-    """Rule 5: an answer may not lean on more than MAX_CITATIONS passages."""
-    from app.grounding.validator import MAX_CITATIONS
-
-    count = MAX_CITATIONS + 1
-    text = " ".join(f"Claim number {n} is made here in its own words [{n}]." for n in range(1, count + 1))
-    shown = evidence(*[chunk() for _ in range(count)])
-    problems = problems_of(answer(text, {n: f"S{n}" for n in range(1, count + 1)}), shown)
-    assert len(problems) == 1 and f"The answer cites {count} passages. Cite at most {MAX_CITATIONS}" in problems[0]
-
-
-# --- ground(): the model writes [S3], the program numbers the markers ---------
-
-
-def model_answer(text: str, enough: bool = True) -> ModelAnswer:
-    """What the model returns: text with [S1]-style markers and the evidence flag, no citation list."""
-    return ModelAnswer(answer=text, enough_evidence=enough)
-
-
-def test_markers_are_numbered_in_order_of_first_use_and_citations_are_built():
-    """S2 is used first, so it becomes [1]; reusing a source keeps its number."""
-    first, second = chunk("iPhone text"), chunk("Services text")
-    shown = evidence(first, second)  # S1 = first, S2 = second
-
-    grounded, passages = ground(model_answer("Services grew [S2]. iPhone fell [S1]. Services again [S2]."), *shown)
-
-    assert grounded.answer == "Services grew [1]. iPhone fell [2]. Services again [1]."
-    assert [(c.marker, c.source_id) for c in grounded.citations] == [(1, "S2"), (2, "S1")]
-    assert [p.excerpt for p in passages] == ["Services text", "iPhone text"]  # marker order
-
-
-def test_a_group_of_sources_in_one_bracket_becomes_separate_markers():
-    """[S1, S2] and [S1][S2] mean the same: one claim on two passages."""
-    shown = evidence(chunk(), chunk())
-
-    grounded, _ = ground(model_answer("A claim on two passages [S1, S2]."), *shown)
-
-    assert grounded.answer == "A claim on two passages [1][2]."
-
-
-def test_a_source_list_written_into_the_text_is_removed_not_refused():
-    """A trailing "Sources:" heading and "[1] S37"-style lines are cleaned up; the answer still passes."""
-    shown = evidence(chunk())
-    text = "Apple grew [S1].\n\nSources:\n[1] S1 Apple 10-K fiscal 2025\n"
-
-    grounded, _ = ground(model_answer(text), *shown)
-
-    assert grounded.answer == "Apple grew [1]."
-
-
-def test_a_source_id_no_search_showed_is_rejected():
-    """[S9] was never shown: rule 1 still applies, now to the id the model wrote in the text."""
-    with pytest.raises(GroundingError) as raised:
-        ground(model_answer("A claim [S9]."), *evidence(chunk()))
-    assert "S9" in raised.value.problems[0]
-
-
-def test_numbered_markers_written_by_the_model_are_rejected_with_the_instruction():
-    """The numbering is the program's job; [1] from the model is sent back with how to cite."""
-    with pytest.raises(GroundingError) as raised:
-        ground(model_answer("A claim [1]."), *evidence(chunk()))
-    assert "Write the source_id as the marker, like [S3]" in raised.value.problems[0]
-
-
-def test_an_honest_not_enough_evidence_answer_passes_ground_with_no_markers():
-    """No markers, no citations, no passages: allowed when enough_evidence is false."""
-    grounded, passages = ground(model_answer("The filings do not say.", enough=False), {}, {})
-    assert grounded.citations == [] and passages == []

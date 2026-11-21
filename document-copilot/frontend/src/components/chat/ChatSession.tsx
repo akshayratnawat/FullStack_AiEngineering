@@ -1,11 +1,13 @@
 import { useChat } from '@ai-sdk/react'
 import type { UIMessage } from 'ai'
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 
 import { useChatOutlet } from '@/components/chat/chat-context'
 import MessageInput from '@/components/chat/MessageInput'
-import MessageList from '@/components/chat/MessageList'
+import MessageList, { type SelectedSource } from '@/components/chat/MessageList'
+import SourcePanel from '@/components/chat/SourcePanel'
 import { createChatTransport } from '@/lib/chat'
+import { sourcesOf } from '@/lib/citations'
 
 interface Props {
   threadId: string
@@ -16,6 +18,7 @@ interface Props {
 export default function ChatSession({ threadId, initialMessages }: Props) {
   const { refreshThreads } = useChatOutlet()
   const [transport] = useState(() => createChatTransport(threadId))
+  const [selected, setSelected] = useState<SelectedSource | null>(null)
 
   const { messages, sendMessage, status, stop, error, clearError } = useChat({
     id: threadId,
@@ -30,14 +33,32 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
     void sendMessage({ text })
   }
 
+  const closeSource = useCallback(() => setSelected(null), [])
+
+  // The open source, looked up from the messages so it always shows what the answer cited.
+  const selectedMessage = selected && messages.find((message) => message.id === selected.messageId)
+  const openSource =
+    selected && selectedMessage
+      ? sourcesOf(selectedMessage).find((source) => source.marker === selected.marker)
+      : undefined
+
   return (
-    <div className="flex h-full flex-col">
-      <MessageList messages={messages} status={status} error={error} />
-      <MessageInput
-        busy={status === 'submitted' || status === 'streaming'}
-        onSend={handleSend}
-        onStop={stop}
-      />
+    <div className="flex h-full">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <MessageList
+          messages={messages}
+          status={status}
+          error={error}
+          selected={selected}
+          onSelectSource={setSelected}
+        />
+        <MessageInput
+          busy={status === 'submitted' || status === 'streaming'}
+          onSend={handleSend}
+          onStop={stop}
+        />
+      </div>
+      {openSource && <SourcePanel source={openSource} highlight={selected?.figure ?? null} onClose={closeSource} />}
     </div>
   )
 }

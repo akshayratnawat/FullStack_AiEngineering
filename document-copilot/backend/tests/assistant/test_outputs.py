@@ -7,7 +7,13 @@ import pytest
 from pydantic import ValidationError
 
 from app.assistant.deps import DocumentAgentDeps
-from app.assistant.outputs import Citation, GroundedAnswer, ModelAnswer, SourcePassage
+from app.assistant.outputs import (
+    Citation,
+    Claim,
+    GroundedAnswer,
+    ModelAnswer,
+    SourcePassage,
+)
 from app.retrieval.queries import ChunkHit
 
 
@@ -49,12 +55,17 @@ def test_malformed_answers_are_rejected(raw):
 def test_schema_sent_to_the_model_carries_the_field_descriptions():
     """The field descriptions reach the schema the model sees, so they act as instructions."""
     schema = json.dumps(ModelAnswer.model_json_schema())
-    assert "[S3]" in schema and "Do not write a list of sources" in schema
+    assert "right after each claim" in schema and "Do not write source ids" in schema
 
 
-def test_the_model_is_not_asked_for_a_citation_list():
-    """The model writes only the text and the evidence flag; the citation list is built by the program."""
-    assert set(ModelAnswer.model_json_schema()["properties"]) == {"answer", "enough_evidence"}
+def test_the_model_returns_claims_not_free_text_or_a_citation_list():
+    """The model writes claims and the evidence flag; the text and the citation list are built by the program."""
+    assert set(ModelAnswer.model_json_schema()["properties"]) == {"claims", "enough_evidence"}
+
+
+def test_a_claim_may_cite_at_most_eight_sources():
+    with pytest.raises(ValidationError):
+        Claim(kind="fact", text="x", sources=[f"S{n}" for n in range(1, 10)])
 
 
 def test_source_passage_copies_the_hit_and_keeps_the_text_as_excerpt():

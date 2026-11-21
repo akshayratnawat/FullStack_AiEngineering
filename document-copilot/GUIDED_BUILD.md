@@ -1077,6 +1077,47 @@ Stream format: in `frontend/node_modules/ai` (7.0.173) the data chunk is `{type:
 - **Leaving the exchange behind when the citation insert fails.** The user sees an error, asks again, and the thread now holds the question twice.
 - **Using the user client for the cleanup.** It is correct: row-level security lets users delete only their own messages, which is all the cleanup needs.
 
+### Step 15 — Wire it into the app (`app/main.py`, `app/api/chat.py`)
+
+**Goal.** The search engine, the embedding client and the agent are created once at startup and shared by every request. Each request gets its own `DocumentAgentDeps` around them and passes it to `run_turn`.
+
+**Why.** Engines and clients hold connection pools, so building them per request would pay that cost every time. The evidence dict is the opposite: it must start empty each turn, or one user's retrieved passages could justify another user's citation. This follows the pattern `service_client` already used.
+
+**Prompt the AI.**
+
+> In the `lifespan` in `app/main.py`, create the search engine (`create_search_engine()`), the embedding client and the agent once and keep them on `app.state`; dispose the engine on shutdown. In `app/api/chat.py` add two dependencies: `get_agent`, which returns the shared agent, and `get_agent_deps`, which builds a fresh `DocumentAgentDeps` per request from the shared engine and client. Pass both into `run_turn`. psycopg's async mode cannot run on Windows' default event loop, so make `python -m app.main` start uvicorn on the selector loop; leave Linux alone. Test that requests share the engine and client but not `retrieved`.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/main.py` | Lifespan builds and disposes the shared pieces; `__main__` starts uvicorn on the selector loop |
+| `app/api/chat.py` | `get_agent` (shared) and `get_agent_deps` (fresh per request), injected into the stream endpoint |
+| `tests/api/test_wiring.py` | The agent is the startup one; engine and client are shared; `retrieved` is not |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 144 passed
+uv run python -m app.main               # then, in another terminal:
+curl http://127.0.0.1:8000/health       # {"status":"ok"}
+```
+
+The server logs "Application startup complete" with the real `.env`, and shutting it down logs "Application shutdown complete" (the engine is disposed first).
+
+**Check your understanding.**
+
+- *Why is the agent shared but the deps are not?* The agent holds no per-user state. The deps hold `retrieved`, which is per turn.
+- *Why does the Windows fix live in `__main__` only?* Railway runs on Linux, which has no such problem, so the production start command stays plain.
+- *Why dispose the engine on shutdown?* It closes the pool's connections cleanly instead of leaving them for the database to time out.
+
+**Common mistakes.**
+
+- **Starting with plain `uvicorn app.main:app` on Windows.** It uses the Proactor loop, and the first retrieval query fails with "cannot use the ProactorEventLoop". Use `python -m app.main` (or `--reload`, which uses the selector loop).
+- **Port 8000 already in use.** A second server fails to bind with "only one usage of each socket address", yet the old one still answers `/health`, so a health check can pass while your new code is not the one running. Check what is listening first.
+- **Building the deps once at startup.** Every turn would then share one `retrieved` dict.
+
 ---
 
 ## Roadmap
@@ -1103,6 +1144,7 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 11 | PydanticAI document agent: tools | **Written (Part 5, Step 11)** |
 | 11 | PydanticAI document agent: agent, grounding retry, usage caps | **Written (Part 5, Step 12)** |
 | 11 | Chat turn runs the agent and streams its sources | **Written (Part 5, Step 13)** |
+| 11 | Agent wired into the app (lifespan, dependencies, Windows event loop) | **Written (Part 5, Step 15)** |
 | 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
 | 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
 | 13 | Final UI: citations, source passages, errors | Planned |

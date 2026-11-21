@@ -21,6 +21,26 @@ from supabase import AsyncClient
 from app.auth.dependencies import CurrentUser
 
 
+def citation_rows(message_id: UUID, citations: list[dict]) -> list[dict]:
+    """The `message_citations` rows for one answer, from the sources streamed with it.
+
+    The excerpt and section are copied here (not looked up later), so the answer keeps
+    showing what it cited even if the filing is re-ingested and its chunks are replaced.
+    """
+    return [
+        {
+            "id": str(uuid4()),
+            "message_id": str(message_id),
+            "chunk_id": citation["chunk_id"],
+            "citation_index": citation["marker"],
+            "excerpt": citation["excerpt"],
+            "section": citation["section"],
+            "page": None,  # the filings are split by section, not page
+        }
+        for citation in citations
+    ]
+
+
 class ChatStore:
     def __init__(self, user_client: AsyncClient, service_client: AsyncClient) -> None:
         self._user = user_client
@@ -93,18 +113,25 @@ class ChatStore:
         assistant_parts: list[dict],
         asked_at: datetime,
         set_title: str | None,
+        citations: list[dict] | None = None,
     ) -> None:
-        """Store one finished exchange: the user's question and the assistant's answer."""
+        """Store one finished exchange: the user's question and the assistant's answer.
+
+        `citations` are the sources of the answer (the entries of its `data-citations`
+        part). They are stored twice on purpose: inside the message's `parts`, which is
+        what a reloaded thread shows, and as `message_citations` rows, which can be queried.
+        """
         # Both rows go in one request, so they are saved together or not at all. They
         # would also get the same database `now()`, which would leave their order
         # undefined, so the timestamps are set here: question first, answer after.
         answered_at = max(datetime.now(UTC), asked_at)
+        user_id, assistant_id = uuid4(), uuid4()
         await (
             self._user.table("chat_messages")
             .insert(
                 [
                     {
-                        "id": str(uuid4()),
+                        "id": str(user_id),
                         "thread_id": str(thread_id),
                         "role": "user",
                         "content": user_text,
@@ -112,7 +139,7 @@ class ChatStore:
                         "created_at": asked_at.isoformat(),
                     },
                     {
-                        "id": str(uuid4()),
+                        "id": str(assistant_id),
                         "thread_id": str(thread_id),
                         "role": "assistant",
                         "content": assistant_text,
@@ -123,6 +150,24 @@ class ChatStore:
             )
             .execute()
         )
+        if citations:
+            try:
+                await (
+                    self._user.table("message_citations")
+                    .insert(citation_rows(assistant_id, citations))
+                    .execute()
+                )
+            except Exception:
+                # A second request cannot join the first one's transaction. Remove the
+                # exchange (its citations cascade) so the user sees an error AND nothing
+                # is stored, and asking again does not leave a duplicate question behind.
+                await (
+                    self._user.table("chat_messages")
+                    .delete()
+                    .in_("id", [str(user_id), str(assistant_id)])
+                    .execute()
+                )
+                raise
         # Moves the thread to the top of the sidebar; the first exchange also names it.
         changes: dict = {"updated_at": answered_at.isoformat()}
         if set_title is not None:

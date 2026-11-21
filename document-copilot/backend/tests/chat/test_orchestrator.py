@@ -13,7 +13,7 @@ from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 
 from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
 from app.chat import orchestrator
-from app.chat.messages import CITATIONS_PART_TYPE, FAILED_PART_TYPE
+from app.chat.messages import CITATIONS_PART_TYPE, FAILED_PART_TYPE, to_ui_message
 from app.chat.orchestrator import run_turn
 from app.retrieval.queries import ChunkHit
 from tests.conftest import ALICE
@@ -217,3 +217,18 @@ def test_a_service_failure_sends_an_error_and_saves_nothing(monkeypatch, store):
     assert "error" in event_types(events)
     assert events[-1] == "data: [DONE]\n\n"
     assert store.saved_turns == []
+
+
+def test_the_sources_reach_the_store_and_survive_a_reload(monkeypatch, store):
+    """Save, then reload the thread as the API does: the answer still carries its sources."""
+    cited_answer(monkeypatch)
+    thread_id = store.add_thread(ALICE)
+
+    run(store, thread_id, "iPhone sales?")
+
+    (turn,) = store.saved_turns
+    assert [c["marker"] for c in turn["citations"]] == [1]  # the rows to insert
+    reloaded = [to_ui_message(row) for row in asyncio.run(store.list_messages(thread_id))]
+    assert [m["role"] for m in reloaded] == ["user", "assistant"]
+    citations_part = next(p for p in reloaded[1]["parts"] if p["type"] == CITATIONS_PART_TYPE)
+    assert citations_part["data"][0]["excerpt"] == CHUNK.content

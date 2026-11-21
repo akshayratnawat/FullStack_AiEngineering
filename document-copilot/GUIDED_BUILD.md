@@ -1036,6 +1036,47 @@ New tests: a cited answer streams `data-citations` between `text-end` and `finis
 - **Saving after `finish`.** The client would show a message that was never stored.
 - **Frontend not yet updated.** The UI ignores unknown `data-` parts, so nothing breaks, but the sources do not show until the citations step is added to the chat UI.
 
+### Step 14 — Save the sources, and check the stream format (`app/database/chats.py`)
+
+**Goal.** Each cited answer is saved with its sources in two places: inside the message's `parts` (so a reloaded thread shows them) and as `message_citations` rows (so they can be queried). The stream's citation chunk is checked against the installed AI SDK.
+
+**Why.** The UI needs the sources live and after a reload. The rows copy the excerpt and section at answer time, so an old answer keeps showing what it cited even if a filing is re-ingested and its chunks are replaced (`chunk_id` becomes null, the snapshot stays).
+
+**Prompt the AI.**
+
+> First check the data-part chunk shape against the installed `ai` package in `frontend/node_modules`. Then extend `ChatStore.save_turn` with an optional `citations` list. After the two messages are inserted, insert one `message_citations` row per source: `chunk_id`, `citation_index` (the `[n]` marker), `excerpt`, `section`, `page` as null. If that insert fails, delete the two messages (their citations cascade) and re-raise, so an error means nothing was stored. The orchestrator passes the streamed sources to `save_turn`. Tests: the rows built, the order of the requests with a fake Supabase client, and a save-then-reload round trip with the fake store.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/chats.py` | `citation_rows` and the extended `save_turn` |
+| `app/chat/orchestrator.py` | Passes `citations=` to `save_turn` |
+| `tests/database/test_chats.py` | Rows, request order, cleanup on failure |
+| `tests/conftest.py` | `FakeStore.save_turn` also keeps the messages, so a test can reload the thread |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 142 passed
+```
+
+Stream format: in `frontend/node_modules/ai` (7.0.173) the data chunk is `{type: "data-<name>", id?, data, transient?}` with any `data-` prefix accepted. Our `{"type": "data-citations", "data": [...]}` matches. Check this again whenever the `ai` package is upgraded; chunk names have changed between major versions.
+
+**Check your understanding.**
+
+- *Why store sources in `parts` and in rows?* `parts` is what the UI reloads, with no joins. The rows are for questions such as "which answers cited this passage?".
+- *Why copy the excerpt instead of joining to the chunk?* Re-ingesting replaces chunks. The foreign key is `ON DELETE SET NULL`, so the old answer keeps its text.
+- *Why not one transaction?* The Supabase API is one request per call, so the citation insert cannot join the message insert. The cleanup delete restores "saved together or not at all".
+- *Why save the thread update last?* A failed save then leaves the thread's order and title unchanged.
+
+**Common mistakes.**
+
+- **Trusting the chunk name from memory.** Read it from the installed package.
+- **Leaving the exchange behind when the citation insert fails.** The user sees an error, asks again, and the thread now holds the question twice.
+- **Using the user client for the cleanup.** It is correct: row-level security lets users delete only their own messages, which is all the cleanup needs.
+
 ---
 
 ## Roadmap
@@ -1063,7 +1104,7 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 11 | PydanticAI document agent: agent, grounding retry, usage caps | **Written (Part 5, Step 12)** |
 | 11 | Chat turn runs the agent and streams its sources | **Written (Part 5, Step 13)** |
 | 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
-| 12 | Citation validation and grounding | Planned |
+| 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
 | 13 | Final UI: citations, source passages, errors | Planned |
 | — | Evaluation set, then deploy on Railway | Planned |
 

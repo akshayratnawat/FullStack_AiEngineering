@@ -110,6 +110,7 @@ async def run_turn(
             ),
             asked_at=asked_at,
             set_title=title,
+            citations=[source for part in outcome.data_parts for source in part["data"]],
         )
 
     try:

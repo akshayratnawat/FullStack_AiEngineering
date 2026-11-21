@@ -51,6 +51,13 @@ class FakeStore:
 
     async def save_turn(self, **turn) -> None:
         self.saved_turns.append(turn)
+        # Also keep the messages, as the real store does, so a test can reload the thread.
+        for role, text, parts in (
+            ("user", turn["user_text"], turn["user_parts"]),
+            ("assistant", turn["assistant_text"], turn["assistant_parts"]),
+        ):
+            row = {"id": str(uuid4()), "role": role, "content": text, "parts": parts}
+            self.messages[turn["thread_id"]].append(row)
 
 
 @pytest.fixture

@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { checkAccess } from '@/lib/account'
+import { describeError } from '@/lib/chat'
 import { supabase } from '@/lib/supabase'
 
 type Mode = 'login' | 'signup'
@@ -20,14 +22,14 @@ type Mode = 'login' | 'signup'
 const COPY = {
   login: {
     title: 'Sign in',
-    description: 'Use your email and password to continue.',
+    description: 'Use your Driftwood email and password to continue.',
     submit: 'Sign in',
     switchText: "Don't have an account?",
     switchLink: { to: '/signup', label: 'Sign up' },
   },
   signup: {
     title: 'Create an account',
-    description: 'Sign up with your email and a password.',
+    description: 'Sign up with your Driftwood email address and a password.',
     submit: 'Sign up',
     switchText: 'Already have an account?',
     switchLink: { to: '/login', label: 'Sign in' },
@@ -54,15 +56,26 @@ export default function AuthForm({ mode }: { mode: Mode }) {
     setNotice(null)
     setSubmitting(true)
 
+    // Signed in: ask the backend whether this account may use the app before going in.
+    async function enter() {
+      try {
+        const refused = await checkAccess()
+        if (refused) setError(refused)
+        else navigate(destination, { replace: true })
+      } catch (failure) {
+        setError(describeError(failure))
+      }
+    }
+
     if (mode === 'login') {
       const { error } = await supabase.auth.signInWithPassword({ email, password })
       if (error) setError(error.message)
-      else navigate(destination, { replace: true })
+      else await enter()
     } else {
       const { data, error } = await supabase.auth.signUp({ email, password })
       if (error) setError(error.message)
       // With email confirmation on, there is no session until the user clicks the link.
-      else if (data.session) navigate(destination, { replace: true })
+      else if (data.session) await enter()
       else setNotice('Check your email to confirm your account, then sign in.')
     }
 

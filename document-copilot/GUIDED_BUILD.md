@@ -1349,6 +1349,32 @@ In the browser (not yet done; it is the open Phase 7 item): start the backend an
 
 ---
 
+### Step 22 — Only Driftwood accounts, and the research shown live
+
+**Only Driftwood accounts.** The brief says analysts sign in with their Driftwood email. Supabase lets anyone sign up, so the backend is the gate:
+
+- `ALLOWED_EMAIL_DOMAINS` (required, comma-separated) and `ALLOWED_EMAILS` (optional, single addresses such as a developer's test account) in `config.py`. A deployment cannot start without a domain, so it can never be open by accident.
+- `get_current_user` returns 403 when the address is outside those domains, and also when the email is not confirmed. Without the second check, anyone could sign up as `someone@driftwood.com` without owning that mailbox.
+- `GET /me`: the sign-in form calls it right after signing in. On a 403 it signs the user out and shows the reason.
+- In Supabase, keep **Confirm email** turned on in production. Otherwise the confirmation check means nothing.
+- Config errors no longer print other settings' values (`hide_input_in_errors`), so a missing setting can't leak part of a key into a log.
+
+**The research shown live.** An answer takes 10 to 120 seconds, because it has to pass the grounding check before any text is sent. The chat used to show one spinner for that whole time.
+
+- The tools announce each step through `deps.report(...)`, for example "Searching AAPL FY2024: iPhone net sales" or "Reading the text around a passage: NVDA 10-K FY2025, Item 7". The grounding check announces itself too, and so does a revision when a claim fails.
+- The orchestrator runs the agent as a task and streams a `data-progress` part after each step. The part keeps the same `id`, and the AI SDK (7.0.173, `index.js` around line 7591) replaces a data part with the same type and id in place.
+- If the browser disconnects, the agent task is cancelled, so no tokens are spent on a reply nobody will read.
+- The steps are saved with the reply. Under an answer they fold into "How this was answered · N steps".
+
+**Check your understanding.**
+
+- *Why not stream the answer text as the model writes it?* The text only exists after the claims pass the check. Streaming the steps is honest about what is happening, and the text is still never shown unchecked.
+- *Why is the domain checked in the backend and not only in the form?* The form can be bypassed; every API call goes through `get_current_user`.
+
+**Status.** 217 backend tests pass. A live run showed the first step at 1.9 s and the text at 10.8 s. Not yet tried in a browser.
+
+---
+
 ---
 
 ## Roadmap
@@ -1384,6 +1410,8 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 13 | Final UI: citations, source passages, errors | **Written (Part 6, Step 19); needs a manual browser check** |
 | 13 | Markers placed by the program, next to each figure | **Written (Part 6, Step 20); live refusal rate to re-measure** |
 | 13 | Chat management, copy and retry, source panel polish, loading and error states | **Written (Part 6, Step 21); needs a manual browser check** |
+| 4 | Only Driftwood accounts (allowed domains + confirmed email) | **Written (Part 6, Step 22)** |
+| 13 | Research steps streamed live while answering | **Written (Part 6, Step 22); needs a manual browser check** |
 | — | Evaluation set, then deploy on Railway | Planned |
 
 ---

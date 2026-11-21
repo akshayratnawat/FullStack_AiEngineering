@@ -1,7 +1,7 @@
 """Writes the AI SDK's "UI message stream": Server-Sent Events carrying small JSON chunks.
 
-One assistant message is: start, text-start, text-delta (many), text-end, finish,
-then the literal [DONE]. The client needs the header below to recognise the format.
+One assistant message is: start, any progress parts, text-start, text-delta (many), text-end,
+the data parts (citations), finish, then the literal [DONE]. The client needs the header below to recognise the format.
 Verify these chunk names against the installed AI SDK version when the frontend
 chat is added; they have changed between major versions.
 """
@@ -31,11 +31,15 @@ async def ui_message_stream(
     on_complete: Callable[[str], Awaitable[None]],
     error_text: str = "Something went wrong. Please try again.",
     data_parts: list[dict] | None = None,
+    before_text: AsyncIterator[dict] | None = None,
 ) -> AsyncIterator[str]:
     """Streams `text_chunks` as one assistant message.
 
     `data_parts` are extra parts such as `{"type": "data-citations", "data": [...]}`. The
     list is read after the last text chunk, so the caller can fill it while the text streams.
+
+    `before_text` yields parts sent before the text starts, such as research progress while the
+    answer is being prepared.
 
     `on_complete` gets the full text once every chunk has been sent, and runs before
     the closing `finish` event. If it fails, the client receives an error event
@@ -44,6 +48,9 @@ async def ui_message_stream(
     text_id = f"{message_id}-text"
     full_text: list[str] = []
     yield sse({"type": "start", "messageId": message_id})
+    if before_text is not None:
+        async for part in before_text:
+            yield sse(part)
     yield sse({"type": "text-start", "id": text_id})
     async for piece in text_chunks:
         full_text.append(piece)

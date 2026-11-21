@@ -25,6 +25,10 @@ TITLE_MAX_CHARS = 60
 FAILED_PART_TYPE = "data-turn-failed"
 # Carries the sources behind an answer's [n] markers; streamed after the text and saved with it.
 CITATIONS_PART_TYPE = "data-citations"
+# The research steps (searches, reads, checks) shown while the answer is prepared. Sent again,
+# with the same id, after each step, and the SDK replaces the part in place; saved with the reply.
+PROGRESS_PART_TYPE = "data-progress"
+PROGRESS_PART_ID = "progress"
 
 
 class UiMessage(BaseModel):
@@ -44,6 +48,10 @@ class ChatStreamRequest(BaseModel):
 
 def text_parts(text: str) -> list[dict]:
     return [{"type": "text", "text": text}]
+
+
+def progress_part(steps: list[str], done: bool) -> dict:
+    return {"type": PROGRESS_PART_TYPE, "id": PROGRESS_PART_ID, "data": {"steps": steps, "done": done}}
 
 
 def citation_parts(answer: GroundedAnswer, passages: list[SourcePassage]) -> list[dict]:

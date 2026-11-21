@@ -94,3 +94,21 @@ def test_a_failed_save_sends_an_error_event_and_no_finish():
     assert types[-2:] == ["error", "[DONE]"]
     assert "finish" not in types
     assert "database is down" not in json.dumps(result)  # internals stay out of the stream
+
+
+def test_before_text_parts_are_sent_after_start_and_before_the_text():
+    async def on_complete(_: str) -> None: ...
+
+    async def progress():
+        yield {"type": "data-progress", "id": "progress", "data": {"steps": ["a"], "done": False}}
+
+    async def run() -> list[str]:
+        return [e async for e in ui_message_stream("m1", pieces("x"), on_complete, before_text=progress())]
+
+    result = parse(asyncio.run(run()))
+
+    assert [r["type"] if isinstance(r, dict) else r for r in result[:3]] == [
+        "start",
+        "data-progress",
+        "text-start",
+    ]

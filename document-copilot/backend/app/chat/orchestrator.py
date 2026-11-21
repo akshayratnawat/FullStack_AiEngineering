@@ -25,6 +25,7 @@ from app.assistant.outputs import ModelAnswer
 from app.chat.messages import (
     citation_parts,
     failed_parts,
+    progress_part,
     text_parts,
     title_from,
     to_model_history,
@@ -35,8 +36,8 @@ from app.database.chats import ChatStore
 
 logger = structlog.get_logger()
 
-# The answer is already complete when streaming starts, so this only gives the UI a typing
-# effect. Kept tiny so it adds about a second to a long answer.
+# The answer is complete before its text is sent (it has to pass the grounding check first), so
+# this only gives the UI a typing effect. Kept tiny so it adds about a second to a long answer.
 STREAM_WORD_DELAY_SECONDS = 0.01
 
 CANNOT_ANSWER_TEXT = (
@@ -57,6 +58,7 @@ class TurnOutcome:
     text: str = ""
     failed: bool = False  # True when `text` explains why there is no answer
     data_parts: list[dict] = field(default_factory=list)  # the citations part, when the answer has sources
+    steps: list[str] = field(default_factory=list)  # the research steps shown while answering
 
 
 async def words(text: str) -> AsyncIterator[str]:
@@ -84,20 +86,48 @@ async def run_turn(
     history = to_model_history(await store.list_messages(thread_id), settings.agent_history_messages)
 
     outcome = TurnOutcome()
+    deps.progress = asyncio.Queue()
+
+    async def research() -> AsyncIterator[dict]:
+        """Run the agent, sending the progress part again after every step it reports.
+
+        The agent runs as a task so its steps can be streamed while it works. If the client goes
+        away, this generator is closed and the `finally` stops the agent, so nothing keeps
+        spending tokens for a reply nobody will read.
+        """
+        run = asyncio.create_task(answer_question(agent, deps, user_text, history))
+        try:
+            while not run.done():
+                next_step = asyncio.ensure_future(deps.progress.get())
+                await asyncio.wait({run, next_step}, return_when=asyncio.FIRST_COMPLETED)
+                if not next_step.done():
+                    next_step.cancel()
+                    break
+                outcome.steps.append(next_step.result())
+                yield progress_part(list(outcome.steps), done=False)
+            while not deps.progress.empty():  # steps reported in the agent's last moments
+                outcome.steps.append(deps.progress.get_nowait())
+            try:
+                answer, passages = run.result()
+                outcome.text = answer.answer
+                # Filled before the text is sent; the stream reads it once the text ends.
+                outcome.data_parts.extend(citation_parts(answer, passages))
+            except UsageLimitExceeded:
+                outcome.text, outcome.failed = TOO_BROAD_TEXT, True
+            except UnexpectedModelBehavior:
+                # The retries allowed by the agent did not produce a grounded answer.
+                outcome.text, outcome.failed = CANNOT_ANSWER_TEXT, True
+            # Any other error propagates: the stream turns it into an error event.
+            yield progress_part(list(outcome.steps), done=True)
+        finally:
+            run.cancel()
 
     async def reply() -> AsyncIterator[str]:
-        try:
-            answer, passages = await answer_question(agent, deps, user_text, history)
-            outcome.text = answer.answer
-            # Filled before the last word is sent; the stream reads it once the text ends.
-            outcome.data_parts.extend(citation_parts(answer, passages))
-        except UsageLimitExceeded:
-            outcome.text, outcome.failed = TOO_BROAD_TEXT, True
-        except UnexpectedModelBehavior:
-            # The retry allowed by the agent did not produce a grounded answer.
-            outcome.text, outcome.failed = CANNOT_ANSWER_TEXT, True
         async for piece in words(outcome.text):
             yield piece
+
+    def saved_progress() -> list[dict]:
+        return [progress_part(outcome.steps, done=True)] if outcome.steps else []
 
     async def save(answer_text: str) -> None:
         await store.save_turn(
@@ -106,7 +136,9 @@ async def run_turn(
             user_parts=text_parts(user_text),
             assistant_text=answer_text,
             assistant_parts=(
-                failed_parts(answer_text) if outcome.failed else [*text_parts(answer_text), *outcome.data_parts]
+                [*saved_progress(), *failed_parts(answer_text)]
+                if outcome.failed
+                else [*saved_progress(), *text_parts(answer_text), *outcome.data_parts]
             ),
             asked_at=asked_at,
             set_title=title,
@@ -115,7 +147,11 @@ async def run_turn(
 
     try:
         async for event in ui_message_stream(
-            message_id=str(uuid4()), text_chunks=reply(), on_complete=save, data_parts=outcome.data_parts
+            message_id=str(uuid4()),
+            text_chunks=reply(),
+            on_complete=save,
+            data_parts=outcome.data_parts,
+            before_text=research(),
         ):
             yield event
     except Exception:

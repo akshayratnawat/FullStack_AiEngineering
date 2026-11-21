@@ -4,8 +4,8 @@ A tiny fake of the Supabase client records each request, so there is no network 
 """
 
 import asyncio
-from types import SimpleNamespace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest

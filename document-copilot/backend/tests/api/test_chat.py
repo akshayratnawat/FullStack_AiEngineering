@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.chat import get_agent, get_agent_deps, get_chat_store, router
+from app.assistant.deps import DocumentAgentDeps
 from app.auth.dependencies import get_current_user
 from tests.conftest import ALICE, BOB
 
@@ -21,7 +22,7 @@ def make_client(store, user=ALICE) -> TestClient:
         app.dependency_overrides[get_chat_store] = lambda: store
         # The orchestrator's agent call is faked in conftest, so any placeholder will do.
         app.dependency_overrides[get_agent] = lambda: object()
-        app.dependency_overrides[get_agent_deps] = lambda: object()
+        app.dependency_overrides[get_agent_deps] = lambda: DocumentAgentDeps(engine=object(), embedding_client=object())
     return TestClient(app)
 
 

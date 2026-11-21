@@ -43,7 +43,8 @@ export function describeError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.isNetworkError) return CANNOT_REACH
     if (error.status === 401) return 'Your session has expired. Please sign in again.'
-    if (error.status === 403) return 'This conversation belongs to another account.'
+    // 403 carries the backend's own reason: another user's chat, or an account not allowed in.
+    if (error.status === 403) return error.message
     if (error.status === 404) return 'This conversation no longer exists.'
     // A 5xx is our side (or the database being busy), not something the user did.
     if (error.status !== null && error.status >= 500) return TRY_AGAIN

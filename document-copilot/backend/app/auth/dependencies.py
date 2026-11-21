@@ -37,6 +37,21 @@ class CurrentUser:
     access_token: str
 
 
+NOT_ALLOWED = "Document Copilot is only for Driftwood email addresses."
+NOT_CONFIRMED = "Confirm your email address first, using the link we sent you."
+
+
+def email_allowed(email: str) -> bool:
+    """True when the address is in an allowed domain or is listed on its own."""
+    email = email.strip().lower()
+    domain = email.rpartition("@")[2]
+    return domain in settings.email_domains or email in settings.extra_emails
+
+
+def forbidden(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def unauthorized(detail: str) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -92,4 +107,11 @@ async def get_current_user(
     if not user_id or not email:
         # This app signs in with email only, so a verified user without one is unexpected.
         raise unauthorized("Token does not belong to an email user.")
+    # Signing up is open in Supabase, so this is the gate: a valid login is not enough, the
+    # address must be one we allow AND proven to belong to the person (confirmed). Without
+    # the second check anyone could sign up as "someone@driftwood.com" without owning it.
+    if not email_allowed(email):
+        raise forbidden(NOT_ALLOWED)
+    if not profile.get("email_confirmed_at"):
+        raise forbidden(NOT_CONFIRMED)
     return CurrentUser(id=UUID(user_id), email=email, access_token=token)

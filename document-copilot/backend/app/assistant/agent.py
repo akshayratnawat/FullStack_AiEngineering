@@ -1,8 +1,9 @@
 """The document agent: instructions + tools + a typed answer, checked for grounding.
 
-The agent searches the filings with its tools, then must return a `ModelAnswer` (text with
-`[S3]`-style source markers). Before it is accepted, the grounding validator checks it against
-what the tools actually returned and numbers the markers, giving a `GroundedAnswer`. If the
+The agent searches the filings with its tools, then must return a `ModelAnswer`: a list of
+claims, each naming the short source ids (S1, S2...) it rests on. Before it is accepted, the
+grounding validator checks every claim against what the tools actually returned, then writes
+the answer text with numbered [n] markers placed by the program, giving a `GroundedAnswer`. If the
 check fails, the model is told what is wrong and gets `agent_output_retries` more tries; after
 that it raises, and the caller shows a controlled error instead of an unsupported answer.
 """
@@ -42,12 +43,14 @@ def create_agent(model: Model | None = None) -> Agent[DocumentAgentDeps, ModelAn
     @agent.output_validator
     def check_grounding(ctx: RunContext[DocumentAgentDeps], answer: ModelAnswer) -> ModelAnswer:
         """Reject an answer whose citations are not backed by what the tools returned."""
+        ctx.deps.report("Checking every claim and figure against its source")
         try:
             ground(answer, ctx.deps.retrieved, ctx.deps.labels)
         except GroundingError as error:
             # Without this, a question that fails twice only says "could not answer" and the
             # reason is lost. Logged so the live runs show which rule the model breaks.
             logger.warning("answer_not_grounded", problems=error.problems)
+            ctx.deps.report("Some claims did not match their sources: revising the answer")
             # The message lists every broken rule, worded for the model, so one retry can fix them all.
             raise ModelRetry(str(error)) from error
         return answer

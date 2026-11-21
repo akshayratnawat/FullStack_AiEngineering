@@ -4,6 +4,7 @@ PydanticAI passes one `DocumentAgentDeps` to every tool call instead of letting 
 reach for globals, which keeps them easy to test with fakes.
 """
 
+import asyncio
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -25,6 +26,14 @@ class DocumentAgentDeps:
     # model copies these when it cites or reads a passage; a 36-character UUID was too easy
     # to garble in a long answer. Numbered per turn, so ids mean nothing across turns.
     labels: dict[UUID, str] = field(default_factory=dict)
+    # Where the tools announce what they are doing ("Searching AAPL FY2024: iPhone net sales"),
+    # so the chat can show the research live. None (scripts, tests) means nobody is listening.
+    progress: asyncio.Queue[str] | None = None
+
+    def report(self, step: str) -> None:
+        """Announce one research step to whoever is showing progress, if anyone."""
+        if self.progress is not None:
+            self.progress.put_nowait(step)
 
     def label_for(self, hit: ChunkHit) -> str:
         """Record a chunk as shown to the model and return its short id (new chunks get the next number)."""

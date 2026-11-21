@@ -7,9 +7,23 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from app.auth.dependencies import CurrentUser, get_current_user, get_http_client
+from app.auth.dependencies import (
+    CurrentUser,
+    email_allowed,
+    get_current_user,
+    get_http_client,
+)
+from app.config import settings
 
 USER_ID = "7b0f2c1e-3d4a-4e5f-8a9b-0c1d2e3f4a5b"
+CONFIRMED = "2026-01-05T10:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def allowed_domains(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The real .env names the real domain; these tests use example.com addresses.
+    monkeypatch.setattr(settings, "allowed_email_domains", "example.com, Driftwood.com")
+    monkeypatch.setattr(settings, "allowed_emails", "contractor@gmail.com")
 
 
 def make_client(handler) -> tuple[TestClient, list[httpx.Request]]:
@@ -40,7 +54,9 @@ def make_client(handler) -> tuple[TestClient, list[httpx.Request]]:
 
 
 def supabase_ok(_: httpx.Request) -> httpx.Response:
-    return httpx.Response(200, json={"id": USER_ID, "email": "analyst@example.com"})
+    return httpx.Response(
+        200, json={"id": USER_ID, "email": "analyst@example.com", "email_confirmed_at": CONFIRMED}
+    )
 
 
 def test_valid_token_returns_the_user_and_asks_supabase_with_that_token():
@@ -111,3 +127,43 @@ def test_verified_user_without_an_email_is_401():
     response = client.get("/me", headers={"Authorization": "Bearer good-token"})
 
     assert response.status_code == 401
+
+
+def test_an_address_outside_the_allowed_domains_is_403():
+    client, _ = make_client(
+        lambda _: httpx.Response(
+            200, json={"id": USER_ID, "email": "someone@gmail.com", "email_confirmed_at": CONFIRMED}
+        )
+    )
+
+    response = client.get("/me", headers={"Authorization": "Bearer good-token"})
+
+    assert response.status_code == 403
+    assert "Driftwood" in response.json()["detail"]
+
+
+def test_an_unconfirmed_address_is_403_even_in_an_allowed_domain():
+    # Otherwise anyone could sign up as someone@driftwood.com without owning the mailbox.
+    client, _ = make_client(
+        lambda _: httpx.Response(200, json={"id": USER_ID, "email": "new@driftwood.com"})
+    )
+
+    response = client.get("/me", headers={"Authorization": "Bearer good-token"})
+
+    assert response.status_code == 403
+    assert "Confirm" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("email", "allowed"),
+    [
+        ("analyst@driftwood.com", True),
+        ("Analyst@DRIFTWOOD.com", True),  # domains are case-insensitive
+        ("contractor@gmail.com", True),  # listed on its own
+        ("other@gmail.com", False),
+        ("analyst@driftwood.com.evil.io", False),  # the domain must match exactly
+        ("analyst@notdriftwood.com", False),
+    ],
+)
+def test_email_allowed(email, allowed):
+    assert email_allowed(email) is allowed

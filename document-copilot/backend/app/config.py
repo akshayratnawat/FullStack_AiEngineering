@@ -16,7 +16,8 @@ TRANSACTION_POOLER_PORT = 6543
 class Settings(BaseSettings):
     """All environment config for the backend. Field `foo_bar` reads env var `FOO_BAR`."""
 
-    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+    # hide_input_in_errors: a missing or bad setting must not print the other values (secrets) in the error.
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore", hide_input_in_errors=True)
 
     # Fields without a default are required: startup fails if they are missing.
     # SecretStr hides the value in logs and tracebacks; use .get_secret_value() to read it.
@@ -33,6 +34,12 @@ class Settings(BaseSettings):
     openai_chat_model: str = "gpt-4.1-mini"
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int = 1536  # must match the pgvector column size
+
+    # Who may use the app: comma-separated email domains, e.g. "driftwood.com". Required, so a
+    # deployment can never start open to anyone who signs up. ALLOWED_EMAILS adds individual
+    # addresses outside those domains (a contractor, a developer's test account).
+    allowed_email_domains: str
+    allowed_emails: str = ""
 
     # Comma-separated browser origins allowed to call the API (CORS).
     allowed_origins: str = "http://localhost:5173"
@@ -107,9 +114,29 @@ class Settings(BaseSettings):
             )
         return value
 
+    @field_validator("allowed_email_domains")
+    @classmethod
+    def require_a_domain(cls, value: str) -> str:
+        if not _csv(value):
+            raise ValueError("allowed_email_domains must name at least one email domain")
+        return value
+
+    @property
+    def email_domains(self) -> frozenset[str]:
+        return frozenset(domain.lstrip("@") for domain in _csv(self.allowed_email_domains))
+
+    @property
+    def extra_emails(self) -> frozenset[str]:
+        return frozenset(_csv(self.allowed_emails))
+
     @property
     def cors_origins(self) -> list[str]:
         return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
+
+
+def _csv(value: str) -> list[str]:
+    """'a.com, B.com,' -> ['a.com', 'b.com']: trimmed, lower-case, empties dropped."""
+    return [item.strip().lower() for item in value.split(",") if item.strip()]
 
 
 # Created once at import; every module does `from app.config import settings`.

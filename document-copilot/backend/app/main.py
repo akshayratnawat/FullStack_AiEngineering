@@ -5,6 +5,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.account import router as account_router
 from app.api.chat import router as chat_router
 from app.assistant.agent import create_agent
 from app.config import settings  # importing this also validates all env config
@@ -36,6 +37,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(account_router)
 app.include_router(chat_router)
 
 

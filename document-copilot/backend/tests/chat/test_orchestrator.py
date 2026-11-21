@@ -11,9 +11,15 @@ from uuid import uuid4
 import pytest
 from pydantic_ai.exceptions import UnexpectedModelBehavior, UsageLimitExceeded
 
+from app.assistant.deps import DocumentAgentDeps
 from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
 from app.chat import orchestrator
-from app.chat.messages import CITATIONS_PART_TYPE, FAILED_PART_TYPE, to_ui_message
+from app.chat.messages import (
+    CITATIONS_PART_TYPE,
+    FAILED_PART_TYPE,
+    PROGRESS_PART_TYPE,
+    to_ui_message,
+)
 from app.chat.orchestrator import run_turn
 from app.retrieval.queries import ChunkHit
 from tests.conftest import ALICE
@@ -21,11 +27,16 @@ from tests.conftest import ALICE
 # --- helpers -----------------------------------------------------------------
 
 
+def new_deps() -> DocumentAgentDeps:
+    # The agent call is faked, so the engine and client are never used.
+    return DocumentAgentDeps(engine=object(), embedding_client=object())
+
+
 def run(store, thread_id, text) -> list[str]:
     """All the SSE events one turn produces."""
 
     async def go() -> list[str]:
-        return [e async for e in run_turn(store, thread_id, text, agent=None, deps=None)]
+        return [e async for e in run_turn(store, thread_id, text, agent=None, deps=new_deps())]
 
     return asyncio.run(go())
 
@@ -84,7 +95,7 @@ def test_nothing_is_saved_when_the_client_disconnects_mid_stream(store):
     thread_id = store.add_thread(ALICE)
 
     async def go() -> None:
-        stream = run_turn(store, thread_id, "hello", agent=None, deps=None)
+        stream = run_turn(store, thread_id, "hello", agent=None, deps=new_deps())
         await anext(stream)  # the client reads one event, then goes away
         await stream.aclose()
 
@@ -232,3 +243,113 @@ def test_the_sources_reach_the_store_and_survive_a_reload(monkeypatch, store):
     assert [m["role"] for m in reloaded] == ["user", "assistant"]
     citations_part = next(p for p in reloaded[1]["parts"] if p["type"] == CITATIONS_PART_TYPE)
     assert citations_part["data"][0]["excerpt"] == CHUNK.content
+
+
+# --- research progress -------------------------------------------------------
+
+
+DONE_EVENT = "data: [DONE]\n\n"
+
+
+def events_of(events: list[str]) -> list[dict]:
+    return [json.loads(e[len("data: ") : -2]) for e in events if e != DONE_EVENT]
+
+
+def researching(monkeypatch, steps: list[str]) -> None:
+    """An agent run that reports `steps` (as the tools do), then answers."""
+
+    async def answer(agent, deps, question, history=None):
+        for step in steps:
+            deps.report(step)
+            await asyncio.sleep(0)  # let the stream send it, as a real tool call would
+        return GroundedAnswer(answer="An answer.", enough_evidence=False), []
+
+    monkeypatch.setattr(orchestrator, "answer_question", answer)
+
+
+def test_each_research_step_is_streamed_before_the_text(monkeypatch, store):
+    researching(monkeypatch, ["Searching AAPL FY2024: iPhone net sales", "Checking every claim"])
+    thread_id = store.add_thread(ALICE)
+
+    events = events_of(run(store, thread_id, "iPhone sales?"))
+
+    progress = [e for e in events if e["type"] == PROGRESS_PART_TYPE]
+    # The first step goes out on its own while the agent works; the last part is the finished
+    # list. (A step reported as the agent finishes may only arrive in that last part.) All share
+    # one id, so the UI replaces the part in place instead of adding a new one each time.
+    assert progress[0]["data"] == {"steps": ["Searching AAPL FY2024: iPhone net sales"], "done": False}
+    assert progress[-1]["data"] == {
+        "steps": ["Searching AAPL FY2024: iPhone net sales", "Checking every claim"],
+        "done": True,
+    }
+    assert all(not p["data"]["done"] for p in progress[:-1])
+    assert len({p["id"] for p in progress}) == 1
+    types = [e["type"] for e in events]
+    last_progress = len(types) - 1 - types[::-1].index(PROGRESS_PART_TYPE)
+    assert types.index("start") < types.index(PROGRESS_PART_TYPE) and last_progress < types.index("text-start")
+
+
+def test_the_research_steps_are_saved_with_the_answer(monkeypatch, store):
+    researching(monkeypatch, ["Searching all filings: capex"])
+    thread_id = store.add_thread(ALICE)
+
+    run(store, thread_id, "Capex?")
+
+    parts = store.saved_turns[0]["assistant_parts"]
+    assert parts[0] == {
+        "type": PROGRESS_PART_TYPE,
+        "id": "progress",
+        "data": {"steps": ["Searching all filings: capex"], "done": True},
+    }
+    assert parts[1] == {"type": "text", "text": "An answer."}
+
+
+def test_the_research_steps_are_kept_when_no_answer_could_be_given(monkeypatch, store):
+    async def answer(agent, deps, question, history=None):
+        deps.report("Searching NVDA: data center demand")
+        raise UnexpectedModelBehavior("no grounded answer")
+
+    monkeypatch.setattr(orchestrator, "answer_question", answer)
+    thread_id = store.add_thread(ALICE)
+
+    run(store, thread_id, "NVIDIA demand?")
+
+    types = [part["type"] for part in store.saved_turns[0]["assistant_parts"]]
+    assert types == [PROGRESS_PART_TYPE, "text", FAILED_PART_TYPE]
+
+
+def test_a_turn_without_research_steps_saves_no_progress_part(store):
+    thread_id = store.add_thread(ALICE)
+
+    run(store, thread_id, "hello")  # the canned agent reports nothing
+
+    types = [part["type"] for part in store.saved_turns[0]["assistant_parts"]]
+    assert PROGRESS_PART_TYPE not in types
+
+
+def test_the_agent_is_stopped_when_the_client_disconnects(monkeypatch, store):
+    started, stopped = asyncio.Event(), []
+
+    async def slow(agent, deps, question, history=None):
+        deps.report("Searching all filings: anything")
+        started.set()
+        try:
+            await asyncio.sleep(60)  # a long model call
+        except asyncio.CancelledError:
+            stopped.append(True)
+            raise
+
+    monkeypatch.setattr(orchestrator, "answer_question", slow)
+    thread_id = store.add_thread(ALICE)
+
+    async def go() -> None:
+        stream = run_turn(store, thread_id, "hello", agent=None, deps=new_deps())
+        await anext(stream)  # start
+        await anext(stream)  # the first progress step
+        await stream.aclose()  # the browser goes away
+        await asyncio.sleep(0)
+
+    asyncio.run(go())
+
+    assert stopped == [True]  # no tokens spent on a reply nobody reads
+    assert store.saved_turns == []

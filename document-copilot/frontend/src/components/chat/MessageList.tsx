@@ -3,11 +3,13 @@ import { Check, Copy, RotateCcw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import AnswerText from '@/components/chat/AnswerText'
+import ResearchSteps from '@/components/chat/ResearchSteps'
 import SourceChips from '@/components/chat/SourceChips'
 import { Button } from '@/components/ui/button'
 import { answerWithFootnotes } from '@/lib/answer'
 import { describeError } from '@/lib/chat'
 import { isFailedReply, sourcesOf } from '@/lib/citations'
+import { progressOf } from '@/lib/progress'
 import { cn } from '@/lib/utils'
 
 // The source an analyst has opened: which message, and which [n] in it.
@@ -87,6 +89,7 @@ export default function MessageList({
           const sources = message.role === 'assistant' ? sourcesOf(message) : []
           const selectedMarker = selected?.messageId === message.id ? selected.marker : null
           const failed = isFailedReply(message)
+          const progress = message.role === 'assistant' ? progressOf(message) : null
           const finished = message.role === 'assistant' && !(streamingReply && message === lastMessage)
           const select = (marker: number, figure: string | null = null) =>
             onSelectSource({ messageId: message.id, marker, figure })
@@ -100,6 +103,7 @@ export default function MessageList({
                 failed && 'border border-dashed border-muted-foreground/40',
               )}
             >
+              {progress && <ResearchSteps progress={progress} />}
               {failed && (
                 <p className="mb-1 text-xs font-medium text-muted-foreground">No answer given</p>
               )}
@@ -109,7 +113,7 @@ export default function MessageList({
                 selectedMarker={selectedMarker}
                 onSelect={select}
               />
-              {streamingReply && message === lastMessage && (
+              {streamingReply && message === lastMessage && textOf(message) && (
                 <span aria-hidden className="ml-0.5 animate-pulse">
                   ▍
                 </span>

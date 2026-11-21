@@ -4,6 +4,8 @@ import { useOutletContext } from 'react-router-dom'
 export interface ChatOutletContext {
   // Reloads the sidebar list, for after a reply when the thread's title or order changed.
   refreshThreads: () => Promise<void>
+  // Opens a new chat, optionally asking `question` in it straight away.
+  startChat: (question?: string) => Promise<void>
 }
 
 export function useChatOutlet() {

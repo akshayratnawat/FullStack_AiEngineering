@@ -39,6 +39,15 @@ class FakeStore:
         now = datetime.now(UTC).isoformat()
         return {"id": str(thread_id), "title": None, "created_at": now, "updated_at": now}
 
+    async def delete_thread(self, thread_id: UUID) -> None:
+        del self.threads[thread_id]
+        del self.messages[thread_id]
+
+    async def rename_thread(self, thread_id: UUID, title: str) -> dict:
+        self.threads[thread_id]["title"] = title
+        now = datetime.now(UTC).isoformat()
+        return {"id": str(thread_id), "title": title, "created_at": now, "updated_at": now}
+
     async def get_thread_owner(self, thread_id: UUID) -> UUID | None:
         thread = self.threads.get(thread_id)
         return thread["owner"] if thread else None

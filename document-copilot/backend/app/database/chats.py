@@ -85,6 +85,20 @@ class ChatStore:
         )
         return UUID(result.data[0]["user_id"]) if result.data else None
 
+    async def delete_thread(self, thread_id: UUID) -> None:
+        # The database cascades: the thread's messages go with it, and their citations
+        # with them. RLS means a user's client can only ever delete their own thread.
+        await self._user.table("chat_threads").delete().eq("id", str(thread_id)).execute()
+
+    async def rename_thread(self, thread_id: UUID, title: str) -> dict:
+        result = await (
+            self._user.table("chat_threads")
+            .update({"title": title})
+            .eq("id", str(thread_id))
+            .execute()
+        )
+        return result.data[0]
+
     async def get_thread_title(self, thread_id: UUID) -> str | None:
         result = await (
             self._user.table("chat_threads")

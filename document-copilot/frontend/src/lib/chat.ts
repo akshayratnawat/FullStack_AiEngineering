@@ -16,6 +16,9 @@ export interface Thread {
 
 export const listThreads = () => api.get<Thread[]>('/threads')
 export const createThread = () => api.post<Thread>('/threads')
+export const renameThread = (threadId: string, title: string) =>
+  api.patch<Thread>(`/threads/${threadId}`, { title })
+export const deleteThread = (threadId: string) => api.delete<void>(`/threads/${threadId}`)
 export const loadMessages = (threadId: string, signal?: AbortSignal) =>
   api.get<UIMessage[]>(`/threads/${threadId}/messages`, { signal })
 
@@ -32,6 +35,7 @@ export function createChatTransport(threadId: string) {
   })
 }
 
+const TRY_AGAIN = 'The server had a problem. Please try again in a moment.'
 const CANNOT_REACH = 'Could not reach the server. Is the backend running?'
 
 // One readable sentence for any failure from the calls above or from the stream.
@@ -41,6 +45,8 @@ export function describeError(error: unknown): string {
     if (error.status === 401) return 'Your session has expired. Please sign in again.'
     if (error.status === 403) return 'This conversation belongs to another account.'
     if (error.status === 404) return 'This conversation no longer exists.'
+    // A 5xx is our side (or the database being busy), not something the user did.
+    if (error.status !== null && error.status >= 500) return TRY_AGAIN
     return error.message
   }
   if (error instanceof Error) {

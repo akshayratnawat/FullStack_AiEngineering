@@ -1314,6 +1314,41 @@ In the browser (not yet done; it is the open Phase 7 item): start the backend an
 - **Forgetting the panel when the message is not found.** The panel looks the source up from the messages every render; if the message is gone it closes, instead of showing stale text.
 - **Unticking nothing.** Phase 7's "click a citation, see the exact passage" stays open until someone has done it in a browser.
 
+### Step 20 — Markers where the facts are (claims, not free text)
+
+**What and why.** Before, the model wrote the whole answer and typed its own `[n]` markers, which ended up bunched at the end of a sentence and sometimes pointed at the wrong passage. Now the model returns a list of **claims**: one statement each, with the short source ids it rests on. The program builds the answer text and places each marker itself.
+
+**How it works.**
+
+- `outputs.py`: a `Claim` has a `kind` (fact, calculation or note), a `text` and a list of `sources`. The model answers with `claims` and `enough_evidence`.
+- `grounding/validator.py`: `ground()` checks every claim, then composes the answer. A figure in a claim must appear in the text of one of the passages it cites (million and billion are converted). A figure that is nowhere in them is rejected, and the model retries; if it still fails, the question is refused. Notes ("the filings do not state X") carry no figures and no sources.
+- The program puts a marker right after each figure, using the passage that contains that figure (a year next to the figure picks between filings). Markers are numbered by order of appearance.
+- Frontend: markers are small superscripts next to the figure. Clicking one opens the passage with that figure highlighted.
+
+**Check your understanding.**
+
+- *Why not let the model place the markers?* It does not reliably know which passage a number came from; the program does.
+- *What does the figure check not catch?* A true number used with the wrong meaning. It proves the number is in the cited passage, not that the sentence is a fair reading of it.
+
+**Status.** Unit tests pass. Live runs after the last tuning were cut short by the database connection limit, so the refusal rate is not yet re-measured (earlier rounds: 7 to 10 of 10 answered).
+
+### Step 21 — Managing chats and reading answers
+
+**Backend.** `PATCH /threads/{id}` renames (blank titles rejected, spaces tidied, 120 characters at most) and `DELETE /threads/{id}` deletes. Both return 404 for an unknown thread and 403 for someone else's. The delete removes only the thread row: the database's `ON DELETE CASCADE` removes its messages and their citation snapshots.
+
+**Frontend.**
+
+- Sidebar: rename (pencil) and delete (bin) on each row, shown on hover and on keyboard focus. Delete asks first; deleting the open chat returns to the home screen. A loading skeleton, and "Try again" when the list fails to load.
+- Answers: **Copy** puts the answer on the clipboard with its markers and a numbered list of sources. **Try again** on a "No answer given" reply or a dropped connection asks the same question again (it is sent as a new message, so the earlier attempt stays in the history).
+- Source panel: previous and next buttons (and the left and right arrow keys), the highlighted figure is scrolled into view, and a link to the company's filings on SEC EDGAR. The link opens the filing list, not the single document, because we do not store EDGAR's company number.
+- Home screen: four example questions from the brief; clicking one creates a chat and asks it.
+- Input: focus returns after a reply, Enter sends, Shift+Enter adds a line, Escape stops a reply that is still coming in.
+- Errors: a server error (5xx) now reads "The server had a problem. Please try again in a moment."
+
+**Status.** 201 backend tests pass; `tsc`, lint and build pass. Not yet tried in a browser.
+
+---
+
 ---
 
 ## Roadmap
@@ -1347,6 +1382,8 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
 | 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
 | 13 | Final UI: citations, source passages, errors | **Written (Part 6, Step 19); needs a manual browser check** |
+| 13 | Markers placed by the program, next to each figure | **Written (Part 6, Step 20); live refusal rate to re-measure** |
+| 13 | Chat management, copy and retry, source panel polish, loading and error states | **Written (Part 6, Step 21); needs a manual browser check** |
 | — | Evaluation set, then deploy on Railway | Planned |
 
 ---

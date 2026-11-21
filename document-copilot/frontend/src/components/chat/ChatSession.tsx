@@ -1,6 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import type { UIMessage } from 'ai'
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useChatOutlet } from '@/components/chat/chat-context'
 import MessageInput from '@/components/chat/MessageInput'
@@ -17,6 +18,8 @@ interface Props {
 // One live conversation. Mount it with `key={threadId}` so each thread gets a fresh chat.
 export default function ChatSession({ threadId, initialMessages }: Props) {
   const { refreshThreads } = useChatOutlet()
+  const location = useLocation()
+  const navigate = useNavigate()
   const [transport] = useState(() => createChatTransport(threadId))
   const [selected, setSelected] = useState<SelectedSource | null>(null)
 
@@ -28,19 +31,42 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
     onFinish: () => void refreshThreads(),
   })
 
-  function handleSend(text: string) {
-    if (error) clearError()
-    void sendMessage({ text })
-  }
+  const send = useCallback(
+    (text: string) => {
+      if (error) clearError()
+      void sendMessage({ text })
+    },
+    [error, clearError, sendMessage],
+  )
+
+  // A question picked on the home screen arrives in the navigation state. Ask it once, then drop
+  // it from the history entry so a refresh or a Back does not ask it again.
+  const asked = useRef(false)
+  useEffect(() => {
+    const question = (location.state as { question?: string } | null)?.question
+    if (!question || asked.current) return
+    asked.current = true
+    navigate(location.pathname, { replace: true, state: null })
+    void sendMessage({ text: question })
+  }, [location, navigate, sendMessage])
 
   const closeSource = useCallback(() => setSelected(null), [])
 
   // The open source, looked up from the messages so it always shows what the answer cited.
   const selectedMessage = selected && messages.find((message) => message.id === selected.messageId)
-  const openSource =
-    selected && selectedMessage
-      ? sourcesOf(selectedMessage).find((source) => source.marker === selected.marker)
-      : undefined
+  const sources = useMemo(() => (selectedMessage ? sourcesOf(selectedMessage) : []), [selectedMessage])
+  const position = selected ? sources.findIndex((source) => source.marker === selected.marker) : -1
+  const openSource = position >= 0 ? sources[position] : undefined
+
+  // Step to the previous or next source of the same answer. The figure highlight belongs to the
+  // marker that was clicked, so it is dropped when moving on.
+  const stepSource = useCallback(
+    (delta: number) => {
+      const next = sources[position + delta]
+      if (selected && next) setSelected({ ...selected, marker: next.marker, figure: null })
+    },
+    [sources, position, selected],
+  )
 
   return (
     <div className="flex h-full">
@@ -51,14 +77,24 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
           error={error}
           selected={selected}
           onSelectSource={setSelected}
+          onRetry={send}
         />
         <MessageInput
           busy={status === 'submitted' || status === 'streaming'}
-          onSend={handleSend}
+          onSend={send}
           onStop={stop}
         />
       </div>
-      {openSource && <SourcePanel source={openSource} highlight={selected?.figure ?? null} onClose={closeSource} />}
+      {openSource && (
+        <SourcePanel
+          source={openSource}
+          highlight={selected?.figure ?? null}
+          position={position}
+          total={sources.length}
+          onStep={stepSource}
+          onClose={closeSource}
+        />
+      )}
     </div>
   )
 }

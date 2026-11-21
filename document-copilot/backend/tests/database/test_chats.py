@@ -4,6 +4,7 @@ A tiny fake of the Supabase client records each request, so there is no network 
 """
 
 import asyncio
+from types import SimpleNamespace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -55,6 +56,8 @@ class FakeClient:
         self.calls.append(self._pending)
         if self._pending[0] == self.fail_on:
             raise RuntimeError("database is down")
+        pending = self._pending
+        return SimpleNamespace(data=[pending[2] if pending[1] == "update" else {}])
 
 
 def save(client: FakeClient, citations) -> None:
@@ -117,3 +120,21 @@ def test_a_failed_citation_save_removes_the_exchange_and_raises():
     assert (table, action) == ("chat_messages", "delete")
     assert len(ids) == 2  # the question and the answer
     assert "chat_threads" not in [t for t, _, _ in client.calls]  # the thread was not touched
+
+
+def test_deleting_a_thread_deletes_only_the_thread_row():
+    client = FakeClient()
+
+    asyncio.run(ChatStore(client, client).delete_thread(uuid4()))
+
+    # Messages and citations are removed by the database's ON DELETE CASCADE, not here.
+    assert [(table, action) for table, action, _ in client.calls] == [("chat_threads", "delete")]
+
+
+def test_renaming_a_thread_updates_its_title():
+    client = FakeClient()
+
+    row = asyncio.run(ChatStore(client, client).rename_thread(uuid4(), "AWS margin"))
+
+    assert client.calls == [("chat_threads", "update", {"title": "AWS margin"})]
+    assert row == {"title": "AWS margin"}

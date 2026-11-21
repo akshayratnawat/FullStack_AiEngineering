@@ -1,8 +1,11 @@
 import type { ChatStatus, UIMessage } from 'ai'
-import { useEffect, useRef } from 'react'
+import { Check, Copy, RotateCcw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 
 import AnswerText from '@/components/chat/AnswerText'
 import SourceChips from '@/components/chat/SourceChips'
+import { Button } from '@/components/ui/button'
+import { answerWithFootnotes } from '@/lib/answer'
 import { describeError } from '@/lib/chat'
 import { isFailedReply, sourcesOf } from '@/lib/citations'
 import { cn } from '@/lib/utils'
@@ -20,13 +23,43 @@ interface Props {
   error: Error | undefined
   selected: SelectedSource | null
   onSelectSource: (selection: SelectedSource) => void
+  onRetry: (question: string) => void // asks the same question again
 }
 
 function textOf(message: UIMessage): string {
   return message.parts.map((part) => (part.type === 'text' ? part.text : '')).join('')
 }
 
-export default function MessageList({ messages, status, error, selected, onSelectSource }: Props) {
+// Copies the answer with its sources listed, and says so for a moment.
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard access can be refused (an insecure page, a blocked permission); nothing to do.
+    }
+  }
+
+  return (
+    <Button variant="ghost" size="xs" onClick={() => void copy()} aria-label="Copy answer with sources">
+      {copied ? <Check /> : <Copy />}
+      {copied ? 'Copied' : 'Copy'}
+    </Button>
+  )
+}
+
+export default function MessageList({
+  messages,
+  status,
+  error,
+  selected,
+  onSelectSource,
+  onRetry,
+}: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
   // Keep the newest text in view as it streams in.
@@ -36,6 +69,10 @@ export default function MessageList({ messages, status, error, selected, onSelec
 
   const lastMessage = messages.at(-1)
   const streamingReply = status === 'streaming' && lastMessage?.role === 'assistant'
+  const idle = status === 'ready' || status === 'error'
+  // The last question the user asked, so a failed reply or a dropped connection can be retried.
+  const lastUser = [...messages].reverse().find((message) => message.role === 'user')
+  const lastQuestion = lastUser ? textOf(lastUser) : ''
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -49,6 +86,8 @@ export default function MessageList({ messages, status, error, selected, onSelec
         {messages.map((message) => {
           const sources = message.role === 'assistant' ? sourcesOf(message) : []
           const selectedMarker = selected?.messageId === message.id ? selected.marker : null
+          const failed = isFailedReply(message)
+          const finished = message.role === 'assistant' && !(streamingReply && message === lastMessage)
           const select = (marker: number, figure: string | null = null) =>
             onSelectSource({ messageId: message.id, marker, figure })
 
@@ -58,10 +97,10 @@ export default function MessageList({ messages, status, error, selected, onSelec
               className={cn(
                 'max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
                 message.role === 'user' ? 'self-end bg-primary text-primary-foreground' : 'self-start bg-muted',
-                isFailedReply(message) && 'border border-dashed border-muted-foreground/40',
+                failed && 'border border-dashed border-muted-foreground/40',
               )}
             >
-              {isFailedReply(message) && (
+              {failed && (
                 <p className="mb-1 text-xs font-medium text-muted-foreground">No answer given</p>
               )}
               <AnswerText
@@ -76,6 +115,17 @@ export default function MessageList({ messages, status, error, selected, onSelec
                 </span>
               )}
               <SourceChips sources={sources} selectedMarker={selectedMarker} onSelect={select} />
+              {finished && textOf(message) && (
+                <div className="mt-2 flex gap-1">
+                  {!failed && <CopyButton text={answerWithFootnotes(textOf(message), sources)} />}
+                  {failed && message === lastMessage && idle && lastQuestion && (
+                    <Button variant="ghost" size="xs" onClick={() => onRetry(lastQuestion)}>
+                      <RotateCcw />
+                      Try again
+                    </Button>
+                  )}
+                </div>
+              )}
             </div>
           )
         })}
@@ -88,9 +138,15 @@ export default function MessageList({ messages, status, error, selected, onSelec
         )}
 
         {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {describeError(error)}
-          </p>
+          <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-destructive">
+            <p>{describeError(error)}</p>
+            {idle && lastQuestion && (
+              <Button variant="outline" size="xs" onClick={() => onRetry(lastQuestion)}>
+                <RotateCcw />
+                Try again
+              </Button>
+            )}
+          </div>
         )}
 
         <div ref={bottomRef} />

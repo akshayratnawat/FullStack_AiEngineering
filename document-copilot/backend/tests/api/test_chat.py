@@ -37,6 +37,8 @@ def stream_request(thread_id, text="What was Apple's revenue?") -> dict:
     [
         ("get", "/threads"),
         ("post", "/threads"),
+        ("patch", f"/threads/{uuid4()}"),
+        ("delete", f"/threads/{uuid4()}"),
         ("get", f"/threads/{uuid4()}/messages"),
         ("post", "/chat/stream"),
     ],
@@ -133,3 +135,50 @@ def test_streaming_returns_sse_with_the_sdk_header_and_then_saves(store):
     assert json.loads(events[0][len("data: ") :])["type"] == "start"
     assert events[-1] == "data: [DONE]"
     assert len(store.saved_turns) == 1
+
+
+def test_delete_removes_the_thread_and_its_messages(store):
+    thread_id = store.add_thread(ALICE, title="Apple revenue")
+    client = make_client(store)
+
+    response = client.delete(f"/threads/{thread_id}")
+
+    assert response.status_code == 204
+    assert thread_id not in store.threads
+    assert client.get(f"/threads/{thread_id}/messages").status_code == 404
+
+
+def test_delete_and_rename_refuse_another_users_thread(store):
+    bobs_thread = store.add_thread(BOB, title="Bob's")
+    client = make_client(store, user=ALICE)
+
+    assert client.delete(f"/threads/{bobs_thread}").status_code == 403
+    assert client.patch(f"/threads/{bobs_thread}", json={"title": "mine now"}).status_code == 403
+    assert store.threads[bobs_thread]["title"] == "Bob's"  # untouched
+
+
+def test_delete_and_rename_unknown_thread_is_404(store):
+    client = make_client(store)
+
+    assert client.delete(f"/threads/{uuid4()}").status_code == 404
+    assert client.patch(f"/threads/{uuid4()}", json={"title": "x"}).status_code == 404
+
+
+def test_rename_trims_and_saves_the_title(store):
+    thread_id = store.add_thread(ALICE, title="Old")
+
+    response = make_client(store).patch(f"/threads/{thread_id}", json={"title": "  AWS   margin  "})
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "AWS margin"
+    assert store.threads[thread_id]["title"] == "AWS margin"
+
+
+@pytest.mark.parametrize("title", ["", "   ", "x" * 121])
+def test_rename_rejects_a_blank_or_too_long_title(store, title):
+    thread_id = store.add_thread(ALICE, title="Old")
+
+    response = make_client(store).patch(f"/threads/{thread_id}", json={"title": title})
+
+    assert response.status_code == 422
+    assert store.threads[thread_id]["title"] == "Old"

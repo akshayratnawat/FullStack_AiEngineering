@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent
 from supabase import AsyncClient
 
@@ -28,6 +28,18 @@ class ThreadOut(BaseModel):
     title: str | None
     created_at: datetime
     updated_at: datetime
+
+
+class ThreadRename(BaseModel):
+    title: str = Field(max_length=120)
+
+    @field_validator("title")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        value = " ".join(value.split())  # trim, and collapse any run of whitespace
+        if not value:
+            raise ValueError("The title cannot be empty.")
+        return value
 
 
 class UiMessageOut(BaseModel):
@@ -92,6 +104,20 @@ async def list_threads(user: CurrentUserDep, store: StoreDep) -> list[ThreadOut]
 @router.post("/threads", status_code=status.HTTP_201_CREATED)
 async def create_thread(user: CurrentUserDep, store: StoreDep) -> ThreadOut:
     return ThreadOut(**await store.create_thread(user))
+
+
+@router.patch("/threads/{thread_id}")
+async def rename_thread(
+    thread_id: UUID, body: ThreadRename, user: CurrentUserDep, store: StoreDep
+) -> ThreadOut:
+    await require_own_thread(store, thread_id, user)
+    return ThreadOut(**await store.rename_thread(thread_id, body.title))
+
+
+@router.delete("/threads/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_thread(thread_id: UUID, user: CurrentUserDep, store: StoreDep) -> None:
+    await require_own_thread(store, thread_id, user)
+    await store.delete_thread(thread_id)
 
 
 @router.get("/threads/{thread_id}/messages")

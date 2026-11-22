@@ -1402,6 +1402,44 @@ In the browser (not yet done; it is the open Phase 7 item): start the backend an
 
 ---
 
+### Step 25 — Getting ready for Vercel
+
+**What and why.** Vercel runs the backend as a serverless function, which differs from a long-running server in three ways that matter here. The repo now handles each:
+
+- **Database connections.** Many function instances can run at once and each opens its own connections. Supabase's session pooler allows 15 clients in total, and one laptop already exhausted it during a run of the client brief. The app's searches now take their own setting, `SEARCH_DATABASE_URL`, which on Vercel is Supabase's *transaction pooler* (port 6543): the engine keeps no pool (`NullPool`) and turns off prepared statements (`prepare_threshold=None`), because the pooler gives each query whichever database connection is free. Without it the engine keeps a small bounded pool (3 + 2) that stays under the session limit. Migrations keep `DATABASE_URL`, which still refuses port 6543 because Alembic needs a session connection.
+- **Client-side routes.** `frontend/vercel.json` sends any path that is not a real file to `index.html`; otherwise refreshing on `/chat/...` is a 404.
+- **Long answers.** An answer can take minutes and streaming time counts against a function. `backend/vercel.json` sets the function's `maxDuration` to 300 seconds (the Hobby plan's maximum).
+
+The step-by-step dashboard checklist (two projects, environment variables, Supabase URL settings, the Azure budget, a post-deploy test) is in [docs/guides/vercel-deploy.md](docs/guides/vercel-deploy.md). The docs that still said "Railway" were corrected, and Phase 9 of the todo list was unticked: no deployment had been done.
+
+**Check your understanding.**
+
+- *Why can't `DATABASE_URL` just be the transaction pooler?* Alembic's schema changes and extension setup need a session connection; only the app's searches can share connections.
+- *Why does the frontend preset have to be Vite and not "Other"?* Vercel can ignore the rewrite under "Other".
+
+**Status.** 236 backend tests pass. Not yet deployed: the settings follow Vercel's and Supabase's documentation, and the first deploy is the real test.
+
+---
+
+### Step 26 — Working on a phone
+
+**What and why.** The first layout was built for a desktop: a fixed 256 px chat list beside the chat would take most of a phone screen. The app now follows the ChatGPT pattern:
+
+- **Drawer.** Below the `md` breakpoint (768 px) the chat list is a drawer that slides over the chat, opened by a menu button in the top bar and closed by tapping outside it, pressing Escape, or choosing a chat. From `md` up it is the same fixed column as before. The drawer remembers the page it was opened on, so navigating closes it with no extra code.
+- **Top bar.** Always present on a phone (it holds the menu button, the app name and a shorter "Contact" button); on a larger screen it only appears when it has something to show.
+- **`dvh`, not `vh`.** A phone's `100vh` is taller than the visible area while the address bar is showing, which pushed the message box off screen. The chat screen and the sign-in pages use `dvh`.
+- **No hover on a touch screen.** The rename and delete icons were visible only on hover, so on a phone they could not be reached. They are always shown on touch screens.
+- **The keyboard.** The message box no longer focuses itself on a touch screen (it opened the on-screen keyboard over every new page), and Enter is a new line there while the Send button sends, as in ChatGPT. The text is 16 px on a phone, because anything smaller makes iPhones zoom in on focus.
+
+**Check your understanding.**
+
+- *Why `pointer: fine` and not the screen width?* A tablet is wide but has no keyboard, and a small laptop window is narrow but does; the pointer type says what the user actually has.
+- *Why is the closed drawer `invisible` rather than only moved off screen?* Off-screen elements can still be reached with the keyboard.
+
+**Status.** Type-check, lint and build pass. Not yet seen on a real phone: check it in the browser's device mode and on a phone after the next deploy.
+
+---
+
 ---
 
 ## Roadmap
@@ -1441,7 +1479,9 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 13 | Research steps streamed live while answering | **Written (Part 6, Step 22); needs a manual browser check** |
 | 13 | Sample questions on the home screen | **Written (Part 6, Step 23); needs a manual browser check** |
 | 4 | Visitors may look around; only approved accounts ask live; five stored sample answers | **Written (Part 6, Step 24); needs a manual browser check** |
-| — | Evaluation set, then deploy on Railway | Planned |
+| — | Vercel readiness: transaction pooler for searches, `vercel.json` in both apps, deploy checklist | **Written (Part 6, Step 25); not yet deployed** |
+| 13 | Phone layout: chat-list drawer, touch-friendly controls | **Written (Part 6, Step 26); needs a check on a real phone** |
+| — | Evaluation set, then the first deploy on Vercel | Planned |
 
 ---
 

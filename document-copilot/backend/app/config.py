@@ -25,6 +25,11 @@ class Settings(BaseSettings):
     supabase_anon_key: SecretStr
     supabase_service_role_key: SecretStr
     database_url: SecretStr  # direct/session connection (it contains the DB password)
+    # The connection the app's search queries use, when it should differ from `database_url`. On
+    # Vercel, set it to Supabase's TRANSACTION pooler (port 6543): every function instance opens
+    # its own connections, and the pooler is what keeps them from exhausting the database.
+    # Left empty, the search uses `database_url`. Migrations always use `database_url`.
+    search_database_url: SecretStr | None = None
     openai_api_key: SecretStr  # the Azure AI Foundry / Azure OpenAI resource key
     # Resource URL, e.g. https://<resource>.openai.azure.com (Azure OpenAI v1 API).
     azure_openai_endpoint: str
@@ -92,6 +97,7 @@ class Settings(BaseSettings):
         "supabase_anon_key",
         "supabase_service_role_key",
         "database_url",
+        "search_database_url",
         "openai_api_key",
         "azure_openai_endpoint",
         "openai_chat_model",
@@ -99,6 +105,8 @@ class Settings(BaseSettings):
     @classmethod
     def reject_placeholders(cls, value: str | SecretStr, info: ValidationInfo) -> str | SecretStr:
         # Catches a copied .env.example whose values were never filled in.
+        if value is None:  # an optional setting that was not given
+            return value
         raw = value.get_secret_value() if isinstance(value, SecretStr) else value
         if PLACEHOLDER_MARKER in raw.lower():
             # Name the field only; never echo the value.
@@ -122,6 +130,11 @@ class Settings(BaseSettings):
         if not _csv(value):
             raise ValueError("llm_allowed_emails must name at least one email address")
         return value
+
+    @property
+    def search_url(self) -> SecretStr:
+        """The database URL for search queries: `search_database_url` if given, else `database_url`."""
+        return self.search_database_url or self.database_url
 
     @property
     def llm_emails(self) -> frozenset[str]:

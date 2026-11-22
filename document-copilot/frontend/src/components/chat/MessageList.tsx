@@ -101,7 +101,7 @@ export default function MessageList({
             <div
               key={message.id}
               className={cn(
-                'max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm',
+                'max-w-[85%] whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-sm',
                 message.role === 'user' ? 'self-end bg-primary text-primary-foreground' : 'self-start bg-muted',
                 failed && 'border border-dashed border-muted-foreground/40',
               )}

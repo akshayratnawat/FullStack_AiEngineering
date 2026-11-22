@@ -176,14 +176,18 @@ Goal: 5 senior analysts can use it for a week and report ≥3 hours saved per an
 
 ---
 
-## Phase 9 — Deployment (Railway)
+## Phase 9 — Deployment (Vercel)
 
-- [x] Railway: backend service (Uvicorn, env vars, `ALLOWED_ORIGINS`)
-- [x] Railway: frontend service (Vite build, `VITE_*` env vars at build time)
-- [x] Supabase: re-enable email confirmation for production if disabled during dev
-- [x] Run `alembic upgrade head` against production Supabase (direct connection)
-- [x] Run ingestion against production database
-- [x] End-to-end test on deployed URLs with a real Driftwood-style email account
+Step by step: [guides/vercel-deploy.md](guides/vercel-deploy.md). The repo is ready (`vercel.json` in both apps, the transaction-pooler setting); the unticked items are done in the Vercel and Supabase dashboards.
+
+- [x] Repo: `frontend/vercel.json` (SPA rewrite), `backend/vercel.json` (function duration), `SEARCH_DATABASE_URL` for the transaction pooler
+- [ ] Vercel: backend project (Root Directory `backend`, env vars, `ALLOWED_ORIGINS`)
+- [ ] Vercel: frontend project (Root Directory `frontend`, `VITE_*` env vars at build time)
+- [ ] Supabase: Site URL and Redirect URLs set to the deployed frontend address
+- [ ] Supabase: decide on "Confirm email" (see the guide: off is fine only while the allowed accounts already exist)
+- [x] Supabase schema applied (`alembic upgrade head`, direct connection) and corpus ingested, in the one Supabase project the app uses
+- [ ] Azure: monthly budget and a tokens-per-minute quota on the OpenAI resource
+- [ ] End-to-end test on the deployed URLs: sign up as a visitor, open a sample question, sign in as the approved account and ask a live question
 
 ---
 

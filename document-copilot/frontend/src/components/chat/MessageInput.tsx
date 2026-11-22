@@ -13,9 +13,13 @@ export default function MessageInput({ busy, onSend, onStop }: Props) {
   const [text, setText] = useState('')
   const textarea = useRef<HTMLTextAreaElement>(null)
 
-  // Ready to type: on opening a chat, and again once a reply has finished.
+  // A mouse and keyboard (a "fine" pointer) as opposed to a touch screen. On a phone, focusing the box
+  // on its own would open the on-screen keyboard over the page every time a chat is opened.
+  const hasKeyboard = () => window.matchMedia('(pointer: fine)').matches
+
+  // Ready to type: on opening a chat, and again once a reply has finished (not on a phone).
   useEffect(() => {
-    if (!busy) textarea.current?.focus()
+    if (!busy && hasKeyboard()) textarea.current?.focus()
   }, [busy])
 
   function submit() {
@@ -37,8 +41,9 @@ export default function MessageInput({ busy, onSend, onStop }: Props) {
       onStop()
       return
     }
-    // Enter sends; Shift+Enter adds a new line. Not while an input method is composing text.
-    if (event.nativeEvent.isComposing) return
+    // Enter sends; Shift+Enter adds a new line. On a phone Enter is a new line and the Send button
+    // sends, as in ChatGPT. Not while an input method is composing text.
+    if (event.nativeEvent.isComposing || !hasKeyboard()) return
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       submit()
@@ -46,14 +51,14 @@ export default function MessageInput({ busy, onSend, onStop }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="border-t p-4">
+    <form onSubmit={handleSubmit} className="border-t p-3 md:p-4">
       <div className="mx-auto flex max-w-3xl items-end gap-2">
         <Textarea
           ref={textarea}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Ask about the filings…  (Enter to send, Shift+Enter for a new line)"
+          placeholder="Ask about the filings…"
           aria-label="Message"
           rows={2}
           className="min-h-0 resize-none"

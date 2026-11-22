@@ -35,11 +35,13 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
     openai_embedding_dimensions: int = 1536  # must match the pgvector column size
 
-    # Who may use the app: comma-separated email domains, e.g. "driftwood.com". Required, so a
-    # deployment can never start open to anyone who signs up. ALLOWED_EMAILS adds individual
-    # addresses outside those domains (a contractor, a developer's test account).
-    allowed_email_domains: str
-    allowed_emails: str = ""
+    # Who may make the assistant answer (every answer spends model tokens on our key). Anyone
+    # may sign up and look around the app; only these accounts may ask. Required, so a
+    # deployment can never start with questions open to everyone.
+    # LLM_ALLOWED_EMAILS: comma-separated addresses, e.g. the owner's. LLM_ALLOWED_DOMAINS:
+    # optional comma-separated domains, e.g. "driftwood.com" for a company deployment.
+    llm_allowed_emails: str
+    llm_allowed_domains: str = ""
 
     # Comma-separated browser origins allowed to call the API (CORS).
     allowed_origins: str = "http://localhost:5173"
@@ -114,20 +116,20 @@ class Settings(BaseSettings):
             )
         return value
 
-    @field_validator("allowed_email_domains")
+    @field_validator("llm_allowed_emails")
     @classmethod
-    def require_a_domain(cls, value: str) -> str:
+    def require_an_address(cls, value: str) -> str:
         if not _csv(value):
-            raise ValueError("allowed_email_domains must name at least one email domain")
+            raise ValueError("llm_allowed_emails must name at least one email address")
         return value
 
     @property
-    def email_domains(self) -> frozenset[str]:
-        return frozenset(domain.lstrip("@") for domain in _csv(self.allowed_email_domains))
+    def llm_emails(self) -> frozenset[str]:
+        return frozenset(_csv(self.llm_allowed_emails))
 
     @property
-    def extra_emails(self) -> frozenset[str]:
-        return frozenset(_csv(self.allowed_emails))
+    def llm_domains(self) -> frozenset[str]:
+        return frozenset(domain.lstrip("@") for domain in _csv(self.llm_allowed_domains))
 
     @property
     def cors_origins(self) -> list[str]:

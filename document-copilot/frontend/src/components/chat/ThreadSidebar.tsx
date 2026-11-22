@@ -13,7 +13,6 @@ interface Props {
   threads: Thread[] | null // null while the first load is running
   loadError: string | null
   actionError: string | null
-  creating: boolean
   onNewChat: () => void
   onRetry: () => void
   onRename: (threadId: string, title: string) => Promise<boolean> // true when it was saved
@@ -148,7 +147,6 @@ export default function ThreadSidebar({
   threads,
   loadError,
   actionError,
-  creating,
   onNewChat,
   onRetry,
   onRename,
@@ -161,9 +159,7 @@ export default function ThreadSidebar({
     <aside className="flex w-64 shrink-0 flex-col border-r bg-muted/30">
       <div className="flex flex-col gap-3 p-3">
         <h1 className="px-1 text-lg font-semibold">Document Copilot</h1>
-        <Button onClick={onNewChat} disabled={creating}>
-          {creating ? 'Creating…' : 'New chat'}
-        </Button>
+        <Button onClick={onNewChat}>New chat</Button>
       </div>
 
       <nav aria-label="Conversations" className="flex-1 overflow-y-auto px-2">

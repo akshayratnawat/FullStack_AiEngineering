@@ -23,7 +23,9 @@ from app.assistant.agent import answer_question
 from app.assistant.deps import DocumentAgentDeps
 from app.assistant.outputs import ModelAnswer
 from app.chat.messages import (
+    CITATIONS_PART_TYPE,
     citation_parts,
+    demo_parts,
     failed_parts,
     progress_part,
     text_parts,
@@ -33,8 +35,14 @@ from app.chat.messages import (
 from app.chat.streaming import sse, ui_message_stream
 from app.config import settings
 from app.database.chats import ChatStore
+from app.demo.replay import DemoAnswer, find_demo
 
 logger = structlog.get_logger()
+
+# A replayed recording shows its research steps at this pace, so it reads like the real thing but
+# never takes long: a recording with many steps is sped up to fit REPLAY_MAX_SECONDS.
+REPLAY_STEP_SECONDS = 0.8
+REPLAY_MAX_SECONDS = 8.0
 
 # The answer is complete before its text is sent (it has to pass the grounding check first), so
 # this only gives the UI a typing effect. Kept tiny so it adds about a second to a long answer.
@@ -87,6 +95,7 @@ async def run_turn(
 
     outcome = TurnOutcome()
     deps.progress = asyncio.Queue()
+    demo = find_demo(user_text)  # a recorded example: replayed, the model is not called
 
     async def research() -> AsyncIterator[dict]:
         """Run the agent, sending the progress part again after every step it reports.
@@ -122,6 +131,17 @@ async def run_turn(
         finally:
             run.cancel()
 
+    async def replay(demo: DemoAnswer) -> AsyncIterator[dict]:
+        """Show a recorded answer the way a live one appears. No model call, no search."""
+        pause = min(REPLAY_STEP_SECONDS, REPLAY_MAX_SECONDS / max(len(demo.steps), 1))
+        for step in demo.steps:
+            await asyncio.sleep(pause)
+            outcome.steps.append(step)
+            yield progress_part(list(outcome.steps), done=False)
+        outcome.text = demo.answer
+        outcome.data_parts.extend(demo_parts(demo.citations, demo.recorded_at, demo.model))
+        yield progress_part(list(outcome.steps), done=True)
+
     async def reply() -> AsyncIterator[str]:
         async for piece in words(outcome.text):
             yield piece
@@ -142,7 +162,12 @@ async def run_turn(
             ),
             asked_at=asked_at,
             set_title=title,
-            citations=[source for part in outcome.data_parts for source in part["data"]],
+            citations=[
+                source
+                for part in outcome.data_parts
+                if part["type"] == CITATIONS_PART_TYPE
+                for source in part["data"]
+            ],
         )
 
     try:
@@ -151,7 +176,7 @@ async def run_turn(
             text_chunks=reply(),
             on_complete=save,
             data_parts=outcome.data_parts,
-            before_text=research(),
+            before_text=replay(demo) if demo else research(),
         ):
             yield event
     except Exception:

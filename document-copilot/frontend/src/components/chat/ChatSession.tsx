@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react'
 import type { UIMessage } from 'ai'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 
 import { useChatOutlet } from '@/components/chat/chat-context'
@@ -17,7 +17,7 @@ interface Props {
 
 // One live conversation. Mount it with `key={threadId}` so each thread gets a fresh chat.
 export default function ChatSession({ threadId, initialMessages }: Props) {
-  const { refreshThreads } = useChatOutlet()
+  const { refreshThreads, requestAsk } = useChatOutlet()
   const location = useLocation()
   const navigate = useNavigate()
   const [transport] = useState(() => createChatTransport(threadId))
@@ -31,7 +31,9 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
     onFinish: () => void refreshThreads(),
   })
 
-  const send = useCallback(
+  // Asks a question with no check: used for the sample questions, which the backend answers from
+  // a stored answer for anyone, and for the question a chat is opened with.
+  const ask = useCallback(
     (text: string) => {
       if (error) clearError()
       void sendMessage({ text })
@@ -39,15 +41,29 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
     [error, clearError, sendMessage],
   )
 
-  // A question picked on the home screen arrives in the navigation state. Ask it once, then drop
-  // it from the history entry so a refresh or a Back does not ask it again.
-  const asked = useRef(false)
+  // What the user types, and "Try again": a visitor needing a live answer sees the notice instead.
+  const send = useCallback(
+    (text: string) => {
+      if (requestAsk(text)) ask(text)
+    },
+    [requestAsk, ask],
+  )
+
+  // A question picked or typed on the new-chat screen arrives in the navigation state. Ask it once,
+  // then drop it from the history entry so a refresh or a Back does not ask it again.
+  //
+  // It is sent from a timer, not straight from the effect, on purpose: in development React mounts
+  // every component, unmounts it and mounts it again, and `useChat` stops its chat on that unmount.
+  // A question sent immediately was stopped by it and never came back (the first click did nothing).
+  // The unmount cancels the timer and the remount sets it again, so the question goes out once.
   useEffect(() => {
     const question = (location.state as { question?: string } | null)?.question
-    if (!question || asked.current) return
-    asked.current = true
-    navigate(location.pathname, { replace: true, state: null })
-    void sendMessage({ text: question })
+    if (!question) return
+    const timer = setTimeout(() => {
+      navigate(location.pathname, { replace: true, state: null })
+      void sendMessage({ text: question })
+    }, 0)
+    return () => clearTimeout(timer)
   }, [location, navigate, sendMessage])
 
   const closeSource = useCallback(() => setSelected(null), [])
@@ -78,6 +94,7 @@ export default function ChatSession({ threadId, initialMessages }: Props) {
           selected={selected}
           onSelectSource={setSelected}
           onRetry={send}
+          onAsk={ask}
         />
         <MessageInput
           busy={status === 'submitted' || status === 'streaming'}

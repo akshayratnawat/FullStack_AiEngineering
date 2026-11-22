@@ -16,11 +16,13 @@ from app.assistant.outputs import Citation, GroundedAnswer, SourcePassage
 from app.chat import orchestrator
 from app.chat.messages import (
     CITATIONS_PART_TYPE,
+    DEMO_PART_TYPE,
     FAILED_PART_TYPE,
     PROGRESS_PART_TYPE,
     to_ui_message,
 )
 from app.chat.orchestrator import run_turn
+from app.demo.replay import DemoAnswer
 from app.retrieval.queries import ChunkHit
 from tests.conftest import ALICE
 
@@ -353,3 +355,77 @@ def test_the_agent_is_stopped_when_the_client_disconnects(monkeypatch, store):
 
     assert stopped == [True]  # no tokens spent on a reply nobody reads
     assert store.saved_turns == []
+
+
+# --- recorded examples -------------------------------------------------------
+
+DEMO = DemoAnswer(
+    question="What was Apple's revenue?",
+    steps=["Searching AAPL: revenue", "Checking every claim and figure against its source"],
+    answer="Apple's revenue was $391,035 million[1].",
+    citations=[{"marker": 1, "ticker": "AAPL", "excerpt": "Total net sales 391,035"}],
+    recorded_at="2026-11-22",
+    model="gpt-4.1-mini",
+)
+
+
+def with_demo(monkeypatch) -> list[str]:
+    """Make DEMO's question a recorded example; returns a log that the model was (not) called."""
+    monkeypatch.setattr(orchestrator, "find_demo", lambda text: DEMO if text == DEMO.question else None)
+    monkeypatch.setattr(orchestrator, "REPLAY_STEP_SECONDS", 0)
+    called: list[str] = []
+
+    async def must_not_run(agent, deps, question, history=None):
+        called.append(question)
+        raise AssertionError("the model was called for a recorded example")
+
+    monkeypatch.setattr(orchestrator, "answer_question", must_not_run)
+    return called
+
+
+def test_a_recorded_example_streams_like_an_answer_without_calling_the_model(monkeypatch, store):
+    called = with_demo(monkeypatch)
+    thread_id = store.add_thread(ALICE)
+
+    events = events_of(run(store, thread_id, DEMO.question))
+
+    assert called == []
+    types = [e["type"] for e in events]
+    assert types.index(PROGRESS_PART_TYPE) < types.index("text-start")
+    assert [e["data"]["steps"] for e in events if e["type"] == PROGRESS_PART_TYPE][-1] == DEMO.steps
+    assert "".join(e["delta"] for e in events if e["type"] == "text-delta") == DEMO.answer
+    assert CITATIONS_PART_TYPE in types and DEMO_PART_TYPE in types
+    assert types[-1] == "finish"
+
+
+def test_a_recorded_example_is_saved_with_its_sources_and_the_recorded_mark(monkeypatch, store):
+    with_demo(monkeypatch)
+    thread_id = store.add_thread(ALICE)
+
+    run(store, thread_id, DEMO.question)
+
+    turn = store.saved_turns[0]
+    assert [p["type"] for p in turn["assistant_parts"]] == [
+        PROGRESS_PART_TYPE,
+        "text",
+        CITATIONS_PART_TYPE,
+        DEMO_PART_TYPE,
+    ]
+    assert turn["assistant_parts"][-1]["data"] == {"recorded_at": "2026-11-22", "model": "gpt-4.1-mini"}
+    # Only real sources become message_citations rows; the recorded-example mark is not one.
+    assert turn["citations"] == DEMO.citations
+
+
+def test_other_questions_still_go_to_the_model(monkeypatch, store):
+    with_demo(monkeypatch)
+    answered: list[str] = []
+
+    async def answer(agent, deps, question, history=None):
+        answered.append(question)
+        return GroundedAnswer(answer="Live.", enough_evidence=False), []
+
+    monkeypatch.setattr(orchestrator, "answer_question", answer)
+
+    run(store, store.add_thread(ALICE), "Something else?")
+
+    assert answered == ["Something else?"]

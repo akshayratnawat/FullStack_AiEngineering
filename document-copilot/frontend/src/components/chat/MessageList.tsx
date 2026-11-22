@@ -3,6 +3,7 @@ import { Check, Copy, RotateCcw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import AnswerText from '@/components/chat/AnswerText'
+import NewChatIntro from '@/components/chat/NewChatIntro'
 import ResearchSteps from '@/components/chat/ResearchSteps'
 import SourceChips from '@/components/chat/SourceChips'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ interface Props {
   selected: SelectedSource | null
   onSelectSource: (selection: SelectedSource) => void
   onRetry: (question: string) => void // asks the same question again
+  onAsk: (question: string) => void // asks a question picked from the examples
 }
 
 function textOf(message: UIMessage): string {
@@ -61,6 +63,7 @@ export default function MessageList({
   selected,
   onSelectSource,
   onRetry,
+  onAsk,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -80,9 +83,9 @@ export default function MessageList({
     <div className="flex-1 overflow-y-auto">
       <div className="mx-auto flex max-w-3xl flex-col gap-4 p-4">
         {messages.length === 0 && (
-          <p className="py-16 text-center text-muted-foreground">
-            Ask a question to start the conversation.
-          </p>
+          <div className="py-10">
+            <NewChatIntro onPick={onAsk} disabled={status !== 'ready'} />
+          </div>
         )}
 
         {messages.map((message) => {

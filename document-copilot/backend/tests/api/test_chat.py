@@ -183,3 +183,42 @@ def test_rename_rejects_a_blank_or_too_long_title(store, title):
 
     assert response.status_code == 422
     assert store.threads[thread_id]["title"] == "Old"
+
+
+def test_a_visitor_cannot_make_the_assistant_answer_and_nothing_is_saved(store):
+    # BOB is a signed-in visitor: allowed to look around, not to spend the model key.
+    thread_id = store.add_thread(BOB)
+    client = make_client(store, user=BOB)
+
+    response = client.post("/chat/stream", json=stream_request(thread_id))
+
+    assert response.status_code == 403
+    assert "Akshay Ratnawat" in response.json()["detail"]
+    assert store.saved_turns == []
+
+
+def test_a_visitor_can_still_use_the_rest_of_the_app(store):
+    client = make_client(store, user=BOB)
+
+    created = client.post("/threads")
+    listed = client.get("/threads")
+
+    assert created.status_code == 201
+    assert listed.status_code == 200
+
+
+def test_a_visitor_may_ask_a_recorded_example_because_it_costs_no_tokens(monkeypatch, store):
+    from app.demo.replay import DemoAnswer
+
+    demo = DemoAnswer("Recorded question?", ["Searching all filings: x"], "Answer.", [], "2026-11-22", "m")
+    monkeypatch.setattr("app.api.chat.find_demo", lambda text: demo if text == demo.question else None)
+    monkeypatch.setattr("app.chat.orchestrator.find_demo", lambda text: demo if text == demo.question else None)
+    monkeypatch.setattr("app.chat.orchestrator.REPLAY_STEP_SECONDS", 0)
+    thread_id = store.add_thread(BOB)
+
+    response = make_client(store, user=BOB).post(
+        "/chat/stream", json=stream_request(thread_id, text="Recorded question?")
+    )
+
+    assert response.status_code == 200
+    assert len(store.saved_turns) == 1

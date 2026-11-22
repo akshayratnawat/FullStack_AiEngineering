@@ -9,21 +9,13 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import (
     CurrentUser,
-    email_allowed,
+    can_use_llm,
     get_current_user,
     get_http_client,
 )
-from app.config import settings
 
 USER_ID = "7b0f2c1e-3d4a-4e5f-8a9b-0c1d2e3f4a5b"
 CONFIRMED = "2026-01-05T10:00:00Z"
-
-
-@pytest.fixture(autouse=True)
-def allowed_domains(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The real .env names the real domain; these tests use example.com addresses.
-    monkeypatch.setattr(settings, "allowed_email_domains", "example.com, Driftwood.com")
-    monkeypatch.setattr(settings, "allowed_emails", "contractor@gmail.com")
 
 
 def make_client(handler) -> tuple[TestClient, list[httpx.Request]]:
@@ -129,23 +121,21 @@ def test_verified_user_without_an_email_is_401():
     assert response.status_code == 401
 
 
-def test_an_address_outside_the_allowed_domains_is_403():
+def test_any_confirmed_address_may_sign_in_and_look_around():
+    # Visitors are welcome; only asking questions is limited (see require_llm_access).
     client, _ = make_client(
         lambda _: httpx.Response(
-            200, json={"id": USER_ID, "email": "someone@gmail.com", "email_confirmed_at": CONFIRMED}
+            200, json={"id": USER_ID, "email": "recruiter@gmail.com", "email_confirmed_at": CONFIRMED}
         )
     )
 
-    response = client.get("/me", headers={"Authorization": "Bearer good-token"})
-
-    assert response.status_code == 403
-    assert "Driftwood" in response.json()["detail"]
+    assert client.get("/me", headers={"Authorization": "Bearer good-token"}).status_code == 200
 
 
-def test_an_unconfirmed_address_is_403_even_in_an_allowed_domain():
-    # Otherwise anyone could sign up as someone@driftwood.com without owning the mailbox.
+def test_an_unconfirmed_address_is_403():
+    # Otherwise anyone could sign up as the owner's address without owning the mailbox.
     client, _ = make_client(
-        lambda _: httpx.Response(200, json={"id": USER_ID, "email": "new@driftwood.com"})
+        lambda _: httpx.Response(200, json={"id": USER_ID, "email": "owner@example.com"})
     )
 
     response = client.get("/me", headers={"Authorization": "Bearer good-token"})
@@ -157,13 +147,13 @@ def test_an_unconfirmed_address_is_403_even_in_an_allowed_domain():
 @pytest.mark.parametrize(
     ("email", "allowed"),
     [
-        ("analyst@driftwood.com", True),
-        ("Analyst@DRIFTWOOD.com", True),  # domains are case-insensitive
-        ("contractor@gmail.com", True),  # listed on its own
-        ("other@gmail.com", False),
-        ("analyst@driftwood.com.evil.io", False),  # the domain must match exactly
+        ("owner@example.com", True),  # listed
+        ("Owner@Example.COM", True),  # case-insensitive
+        ("analyst@driftwood.com", True),  # an allowed domain
+        ("recruiter@gmail.com", False),
+        ("owner@example.com.evil.io", False),  # a domain must match exactly
         ("analyst@notdriftwood.com", False),
     ],
 )
-def test_email_allowed(email, allowed):
-    assert email_allowed(email) is allowed
+def test_can_use_llm(email, allowed):
+    assert can_use_llm(email) is allowed

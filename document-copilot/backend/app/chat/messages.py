@@ -28,6 +28,8 @@ CITATIONS_PART_TYPE = "data-citations"
 # The research steps (searches, reads, checks) shown while the answer is prepared. Sent again,
 # with the same id, after each step, and the SDK replaces the part in place; saved with the reply.
 PROGRESS_PART_TYPE = "data-progress"
+# Marks a reply that replays a recorded example instead of a new answer; saved with the reply.
+DEMO_PART_TYPE = "data-demo"
 PROGRESS_PART_ID = "progress"
 
 
@@ -52,6 +54,12 @@ def text_parts(text: str) -> list[dict]:
 
 def progress_part(steps: list[str], done: bool) -> dict:
     return {"type": PROGRESS_PART_TYPE, "id": PROGRESS_PART_ID, "data": {"steps": steps, "done": done}}
+
+
+def demo_parts(citations: list[dict], recorded_at: str, model: str) -> list[dict]:
+    """The parts of a replayed recording: its sources (when it has any) and the recorded-example mark."""
+    parts = [{"type": CITATIONS_PART_TYPE, "data": citations}] if citations else []
+    return [*parts, {"type": DEMO_PART_TYPE, "data": {"recorded_at": recorded_at, "model": model}}]
 
 
 def citation_parts(answer: GroundedAnswer, passages: list[SourcePassage]) -> list[dict]:

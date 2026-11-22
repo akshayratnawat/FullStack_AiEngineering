@@ -22,14 +22,14 @@ type Mode = 'login' | 'signup'
 const COPY = {
   login: {
     title: 'Sign in',
-    description: 'Use your Driftwood email and password to continue.',
+    description: 'Use your email and password to continue.',
     submit: 'Sign in',
     switchText: "Don't have an account?",
     switchLink: { to: '/signup', label: 'Sign up' },
   },
   signup: {
     title: 'Create an account',
-    description: 'Sign up with your Driftwood email address and a password.',
+    description: 'Create an account with your email address and a password to look around.',
     submit: 'Sign up',
     switchText: 'Already have an account?',
     switchLink: { to: '/login', label: 'Sign in' },

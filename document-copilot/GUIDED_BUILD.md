@@ -1351,7 +1351,7 @@ In the browser (not yet done; it is the open Phase 7 item): start the backend an
 
 ### Step 22 — Only Driftwood accounts, and the research shown live
 
-**Only Driftwood accounts.** The brief says analysts sign in with their Driftwood email. Supabase lets anyone sign up, so the backend is the gate:
+**Only Driftwood accounts (superseded by Step 24: sign-up is now open and only *asking* is limited, with `LLM_ALLOWED_EMAILS` / `LLM_ALLOWED_DOMAINS` replacing `ALLOWED_EMAIL_DOMAINS` / `ALLOWED_EMAILS`; the confirmed-email check and `GET /me` stay).** The brief says analysts sign in with their Driftwood email. Supabase lets anyone sign up, so the backend is the gate:
 
 - `ALLOWED_EMAIL_DOMAINS` (required, comma-separated) and `ALLOWED_EMAILS` (optional, single addresses such as a developer's test account) in `config.py`. A deployment cannot start without a domain, so it can never be open by accident.
 - `get_current_user` returns 403 when the address is outside those domains, and also when the email is not confirmed. Without the second check, anyone could sign up as `someone@driftwood.com` without owning that mailbox.
@@ -1372,6 +1372,33 @@ In the browser (not yet done; it is the open Phase 7 item): start the backend an
 - *Why is the domain checked in the backend and not only in the form?* The form can be bypassed; every API call goes through `get_current_user`.
 
 **Status.** 217 backend tests pass. A live run showed the first step at 1.9 s and the text at 10.8 s. Not yet tried in a browser.
+
+---
+
+### Step 23 — Sample questions on the home screen
+
+**What and why.** A visitor who sees an empty box does not know what the assistant is good at. The home screen and an empty chat list five questions, one per row: a heading and the question in small text under it. One click asks it. The list lives in `frontend/src/lib/examples.ts`.
+
+**Every sample question is checked before it is shown.** A first draft had an NVIDIA data center revenue question. Run live, the answer called $82,875 million "revenue", but that number is the Compute & Networking segment's *operating income*; Data Center revenue is $115,186 million. The grounding check passed because the number really is in the cited passage: it proves a number is in the source, not that the sentence labels it correctly. The same kind of mistake turned up again while recording the AI-spending answer (Amazon's *financing obligations* described as purchase obligations; NVIDIA's purchase obligations credited to Amazon in another take). Neither answer was used. Catching this needs the model to quote the label next to the figure and the program to check the quote, which is still to do.
+
+---
+
+### Step 24 — A demo that is safe to share: visitors, stored answers, no open key
+
+**The problem.** Every answer spends model tokens on the owner's key. To let others see the app without that risk:
+
+- **Anyone can sign up and look around** (a confirmed email is required, so nobody can claim someone else's address). Only accounts in `LLM_ALLOWED_EMAILS` (and optional `LLM_ALLOWED_DOMAINS`) may make the model answer. `GET /me` returns `can_ask`; `POST /chat/stream` refuses everyone else with a 403 and a plain message. The setting is required, so a deployment can never start with questions open to everyone.
+- **Typing a question as a visitor** shows a professional notice ("Live questions are by invitation… please reach out to Akshay Ratnawat") with a Contact button, and a "Contact Akshay" button sits at the top right of every page (`VITE_CONTACT_URL`).
+- **The five sample questions work for everyone, without a model call.** Their answers are stored in `backend/app/demo/answers.json`. When one of those questions is asked, the app replays the stored answer: the research steps, the typed text, and the sources with their exact passages, and saves it like any answer. Typing the same question gives the same result. The backend marks such replies in the saved data (`data-demo`) so they can be told apart; the app does not label them for visitors.
+- **How the stored answers were made.** `scripts/record_demo.py` runs the real agent and saves what it produced. Several takes were recorded per question and the one kept was checked figure by figure against the filings (including what each figure is *labelled* as). Nothing was edited by hand. They are recordings of real runs, dated 22 November 2026 with `gpt-4.1-mini`; a new run could word an answer differently. The narrative ones (supplier concentration) have no figures to check and were spot-read, not verified claim by claim.
+- **A test keeps the list honest**: `test_every_example_has_a_recording` fails if a question on the home screen has no stored answer.
+
+**Still to do before sharing the link widely.** A monthly budget and a tokens-per-minute quota on the Azure resource (the only limit that holds even if our code has a bug); the owner's address must be confirmed in Supabase; Supabase **Confirm email** stays on. The recorder hit Azure's tokens-per-minute limit on long cross-company questions until the quota was raised; the same would happen to live questions.
+
+**Check your understanding.**
+
+- *Why must the email be confirmed before it counts as the owner's?* Otherwise anyone could sign up as the owner's address and be given the model key.
+- *Why is the check in the backend and not only in the browser?* The browser can be bypassed; the backend is the only thing between a request and the model.
 
 ---
 
@@ -1410,8 +1437,10 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 13 | Final UI: citations, source passages, errors | **Written (Part 6, Step 19); needs a manual browser check** |
 | 13 | Markers placed by the program, next to each figure | **Written (Part 6, Step 20); live refusal rate to re-measure** |
 | 13 | Chat management, copy and retry, source panel polish, loading and error states | **Written (Part 6, Step 21); needs a manual browser check** |
-| 4 | Only Driftwood accounts (allowed domains + confirmed email) | **Written (Part 6, Step 22)** |
+| 4 | Domain gate on sign-in (replaced by the visitor model in Step 24) | Superseded (Part 6, Step 22) |
 | 13 | Research steps streamed live while answering | **Written (Part 6, Step 22); needs a manual browser check** |
+| 13 | Sample questions on the home screen | **Written (Part 6, Step 23); needs a manual browser check** |
+| 4 | Visitors may look around; only approved accounts ask live; five stored sample answers | **Written (Part 6, Step 24); needs a manual browser check** |
 | — | Evaluation set, then deploy on Railway | Planned |
 
 ---

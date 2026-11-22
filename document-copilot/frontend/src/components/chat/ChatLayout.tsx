@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Outlet, useMatch, useNavigate } from 'react-router-dom'
 
+import { ArrowUpRight } from 'lucide-react'
+
 import type { ChatOutletContext } from '@/components/chat/chat-context'
+import DemoNoticeDialog from '@/components/chat/DemoNoticeDialog'
 import ThreadSidebar from '@/components/chat/ThreadSidebar'
+import { Button } from '@/components/ui/button'
+import { getAccount } from '@/lib/account'
+import { env } from '@/lib/env'
+import { hasStoredAnswer } from '@/lib/examples'
 import {
   createThread,
   deleteThread,
@@ -21,7 +28,10 @@ export default function ChatLayout() {
   const [threads, setThreads] = useState<Thread[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null) // the list could not load
   const [actionError, setActionError] = useState<string | null>(null) // a create/rename/delete failed
-  const [creating, setCreating] = useState(false)
+  // Whether this account may ask live questions; null until /me answers. While unknown nothing is
+  // blocked here: the backend decides, so a slow answer can never wrongly lock the owner out.
+  const [canAsk, setCanAsk] = useState<boolean | null>(null)
+  const [noticeOpen, setNoticeOpen] = useState(false)
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -47,6 +57,30 @@ export default function ChatLayout() {
     }
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    getAccount()
+      .then((account) => {
+        if (!cancelled) setCanAsk(account.can_ask)
+      })
+      .catch(() => {
+        // Left unknown: the app still works, and the backend refuses what it must.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const requestAsk = useCallback(
+    (question: string) => {
+      // A sample question is replayed by the backend without a model call, so anyone may ask it.
+      if (canAsk !== false || hasStoredAnswer(question)) return true
+      setNoticeOpen(true)
+      return false
+    },
+    [canAsk],
+  )
+
   // Try the failed load again, showing the loading state while it runs.
   const retryLoad = useCallback(() => {
     setLoadError(null)
@@ -55,7 +89,6 @@ export default function ChatLayout() {
 
   const startChat = useCallback(
     async (question?: string) => {
-      setCreating(true)
       setActionError(null)
       try {
         const thread = await createThread()
@@ -64,8 +97,6 @@ export default function ChatLayout() {
         navigate(`/chat/${thread.id}`, { state: question ? { question } : undefined })
       } catch (failure) {
         setActionError(describeError(failure))
-      } finally {
-        setCreating(false)
       }
     },
     [navigate, refreshThreads],
@@ -99,7 +130,7 @@ export default function ChatLayout() {
     await refreshThreads()
   }
 
-  const context: ChatOutletContext = { refreshThreads, startChat }
+  const context: ChatOutletContext = { refreshThreads, startChat, requestAsk }
 
   return (
     <div className="flex h-screen">
@@ -107,15 +138,37 @@ export default function ChatLayout() {
         threads={threads}
         loadError={loadError}
         actionError={actionError}
-        creating={creating}
-        onNewChat={() => void startChat()}
+        onNewChat={() => navigate('/')}
         onRetry={retryLoad}
         onRename={handleRename}
         onDelete={handleDelete}
       />
-      <main className="min-w-0 flex-1">
-        <Outlet context={context} />
+      <main className="flex min-w-0 flex-1 flex-col">
+        {/* Top bar: a way to reach the owner for a live demo, and, for a visitor, why asking is limited. */}
+        {(env.contactUrl || canAsk === false) && (
+          <div className="flex items-center justify-between gap-3 border-b bg-muted/30 px-4 py-2">
+            <p className="min-w-0 text-xs text-muted-foreground">
+              {canAsk === false &&
+                'You are viewing as a visitor. Try the sample questions to see how answers and sources work; your own questions are limited to approved accounts.'}
+            </p>
+            {env.contactUrl && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                render={<a href={env.contactUrl} target="_blank" rel="noreferrer" />}
+              >
+                Contact Akshay
+                <ArrowUpRight />
+              </Button>
+            )}
+          </div>
+        )}
+        <div className="min-h-0 flex-1">
+          <Outlet context={context} />
+        </div>
       </main>
+      <DemoNoticeDialog open={noticeOpen} onClose={() => setNoticeOpen(false)} />
     </div>
   )
 }

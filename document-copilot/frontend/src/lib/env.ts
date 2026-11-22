@@ -28,7 +28,15 @@ function requireUrl(name: string, value: string | undefined): string {
   return trimmed
 }
 
+// A link where visitors can reach the owner (a mailto: or a profile URL). Optional: without it the
+// "live questions are by invitation" notice just names the owner.
+function optionalUrl(name: string, value: string | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? requireUrl(name, trimmed) : null
+}
+
 export const env = {
+  contactUrl: optionalUrl('VITE_CONTACT_URL', import.meta.env.VITE_CONTACT_URL),
   // No trailing slash, so `${env.apiBaseUrl}/health` is always well formed.
   apiBaseUrl: requireUrl('VITE_API_BASE_URL', import.meta.env.VITE_API_BASE_URL).replace(/\/+$/, ''),
   supabaseUrl: requireUrl('VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL),

@@ -13,12 +13,13 @@ from supabase import AsyncClient
 
 from app.assistant.deps import DocumentAgentDeps
 from app.assistant.outputs import ModelAnswer
-from app.auth.dependencies import CurrentUser, get_current_user
+from app.auth.dependencies import CurrentUser, get_current_user, require_llm_access
 from app.chat.messages import ChatStreamRequest, new_user_text, to_ui_message
 from app.chat.orchestrator import run_turn
 from app.chat.streaming import STREAM_HEADERS
 from app.database.chats import ChatStore
 from app.database.supabase import create_user_client
+from app.demo.replay import find_demo
 
 router = APIRouter()
 
@@ -142,6 +143,10 @@ async def chat_stream(
         user_text = new_user_text(body.messages)
     except ValueError as error:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(error)) from error
+    # The only route that spends model tokens. A recorded example is replayed without calling
+    # the model, so a visitor may ask it; anything else needs an approved account.
+    if find_demo(user_text) is None:
+        require_llm_access(user)
     return StreamingResponse(
         run_turn(store, body.thread_id, user_text, agent, deps),
         media_type="text/event-stream",

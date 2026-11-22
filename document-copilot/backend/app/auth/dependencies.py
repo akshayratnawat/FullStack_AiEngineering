@@ -37,15 +37,19 @@ class CurrentUser:
     access_token: str
 
 
-NOT_ALLOWED = "Document Copilot is only for Driftwood email addresses."
 NOT_CONFIRMED = "Confirm your email address first, using the link we sent you."
+# Shown to a signed-in visitor who asks a question. Anyone can sign up and look around, but
+# every answer spends model tokens on the owner's key, so asking is limited to a few accounts.
+DEMO_ONLY = (
+    "Questions are limited to approved demo accounts. "
+    "Please reach out to Akshay Ratnawat if you would like to see a live demo."
+)
 
 
-def email_allowed(email: str) -> bool:
-    """True when the address is in an allowed domain or is listed on its own."""
+def can_use_llm(email: str) -> bool:
+    """True when this address may make the assistant answer: listed, or in an allowed domain."""
     email = email.strip().lower()
-    domain = email.rpartition("@")[2]
-    return domain in settings.email_domains or email in settings.extra_emails
+    return email in settings.llm_emails or email.rpartition("@")[2] in settings.llm_domains
 
 
 def forbidden(detail: str) -> HTTPException:
@@ -107,11 +111,15 @@ async def get_current_user(
     if not user_id or not email:
         # This app signs in with email only, so a verified user without one is unexpected.
         raise unauthorized("Token does not belong to an email user.")
-    # Signing up is open in Supabase, so this is the gate: a valid login is not enough, the
-    # address must be one we allow AND proven to belong to the person (confirmed). Without
-    # the second check anyone could sign up as "someone@driftwood.com" without owning it.
-    if not email_allowed(email):
-        raise forbidden(NOT_ALLOWED)
+    # Anyone may sign up and use the app's read-only parts, but only for an address proven to
+    # belong to the person. Otherwise "owner@..." could be claimed by someone who does not own
+    # it, and `can_use_llm` below would be handed to them.
     if not profile.get("email_confirmed_at"):
         raise forbidden(NOT_CONFIRMED)
     return CurrentUser(id=UUID(user_id), email=email, access_token=token)
+
+
+def require_llm_access(user: CurrentUser) -> None:
+    """Call before anything that makes the model answer. 403 with a plain explanation otherwise."""
+    if not can_use_llm(user.email):
+        raise forbidden(DEMO_ONLY)

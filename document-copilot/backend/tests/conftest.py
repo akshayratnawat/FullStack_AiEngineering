@@ -8,9 +8,17 @@ import pytest
 from app.assistant.outputs import GroundedAnswer
 from app.auth.dependencies import CurrentUser
 from app.chat import orchestrator
+from app.config import settings
 
 ALICE = CurrentUser(id=uuid4(), email="alice@example.com", access_token="alice-token")
 BOB = CurrentUser(id=uuid4(), email="bob@example.com", access_token="bob-token")
+
+
+@pytest.fixture(autouse=True)
+def demo_accounts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Alice may ask questions; Bob (and anyone else) is a visitor. Independent of the real .env."""
+    monkeypatch.setattr(settings, "llm_allowed_emails", "alice@example.com, owner@example.com")
+    monkeypatch.setattr(settings, "llm_allowed_domains", "driftwood.com")
 
 
 class FakeStore:

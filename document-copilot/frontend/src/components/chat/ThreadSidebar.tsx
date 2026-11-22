@@ -156,7 +156,7 @@ export default function ThreadSidebar({
   const [editing, setEditing] = useState<Editing>(null)
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r bg-muted/30">
+    <aside className="flex h-full w-full flex-col border-r bg-background md:bg-muted/30">
       <div className="flex flex-col gap-3 p-3">
         <h1 className="px-1 text-lg font-semibold">Document Copilot</h1>
         <Button onClick={onNewChat}>New chat</Button>
@@ -219,8 +219,8 @@ export default function ThreadSidebar({
                     >
                       {thread.title ?? 'New chat'}
                     </NavLink>
-                    {/* Shown on hover and whenever the row has keyboard focus. */}
-                    <div className="flex opacity-0 group-focus-within:opacity-100 group-hover:opacity-100">
+                    {/* A touch screen has no hover, so there they are always shown; on a desktop they appear on hover and keyboard focus. */}
+                    <div className="flex md:opacity-0 md:group-focus-within:opacity-100 md:group-hover:opacity-100">
                       <Button
                         variant="ghost"
                         size="icon-xs"

@@ -15,7 +15,7 @@ Full brief: [docs/problemStatement.md](document-copilot/docs/problemStatement.md
 | Migrations         | SQLAlchemy models + Alembic                          |
 | Retrieval          | Supabase `pgvector` + Postgres full-text search      |
 | Auth               | Supabase Auth (email only)                           |
-| Hosting            | Railway                                              |
+| Hosting            | Vercel (frontend + backend as two projects)          |
 | LLM + embeddings   | OpenAI                                               |
 
 ## Repo layout

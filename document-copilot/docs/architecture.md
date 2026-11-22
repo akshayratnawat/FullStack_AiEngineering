@@ -14,7 +14,7 @@ The best opening diagram is a service-level view that shows the two core paths: 
 flowchart LR
     user[Analyst] --> browser[Browser<br/>React chat app]
 
-    subgraph railway[Railway]
+    subgraph vercel[Vercel]
         frontend[Frontend service<br/>Vite build]
         backend[Backend service<br/>FastAPI + PydanticAI]
     end
@@ -49,7 +49,7 @@ flowchart LR
 - Use Supabase for identity and durable product state: users, chat threads, source documents, chunks, embeddings, and citation metadata.
 - Use Supabase `pgvector` for semantic retrieval and Postgres full-text search for keyword retrieval.
 - Make the LLM path typed and testable by using PydanticAI agents with explicit dependencies, outputs, and tool boundaries.
-- Preserve a simple deployment model on Railway: one frontend service, one stateless backend service, and hosted Supabase.
+- Preserve a simple deployment model on Vercel: one frontend project, one stateless backend function, and hosted Supabase.
 
 ## Stack
 
@@ -369,12 +369,14 @@ Do not read environment variables directly from components, route handlers, or s
 
 ## Deployment Shape
 
-Railway should run two services:
+Vercel runs two projects from this repository (step by step: [guides/vercel-deploy.md](guides/vercel-deploy.md)):
 
-- Frontend: static Vite build served as a web app.
-- Backend: FastAPI service running Uvicorn.
+- Frontend (Root Directory `frontend`): the static Vite build. `frontend/vercel.json` sends every path to `index.html` so client-side routes survive a refresh.
+- Backend (Root Directory `backend`): the FastAPI app as a Vercel Function, detected at `app/main.py`. `backend/vercel.json` raises the function's maximum duration, because an answer can take minutes and streaming time counts.
 
-Supabase remains hosted and stores the durable retrieval data. The Railway backend can stay stateless because document chunks, embeddings, full-text search vectors, chats, and citations all live in Supabase Postgres. Raw downloaded filings remain gitignored local ingestion inputs unless a later workflow stores them in object storage.
+Many function instances can run at once and each opens its own database connections, so the app's search queries use Supabase's transaction pooler (`SEARCH_DATABASE_URL`, port 6543, no connection pool of our own, prepared statements off). Migrations keep the direct connection (`DATABASE_URL`).
+
+Supabase remains hosted and stores the durable retrieval data. The Vercel backend can stay stateless because document chunks, embeddings, full-text search vectors, chats, and citations all live in Supabase Postgres. Raw downloaded filings remain gitignored local ingestion inputs unless a later workflow stores them in object storage.
 
 ## Implementation Sequence
 

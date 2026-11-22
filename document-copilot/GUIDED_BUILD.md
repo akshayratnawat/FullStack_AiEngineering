@@ -714,6 +714,669 @@ cd ~                         # go somewhere unrelated
 
 ---
 
+## Part 3 — The chat shell (backend)
+
+### Step 7 — Threads, a streaming endpoint with a stubbed reply, and saving
+
+**Goal.** Four routes, all behind sign-in: list threads, create a thread, load a thread's messages, and `POST /chat/stream`, which streams a canned assistant reply and saves the exchange when it ends. Another user's thread gives `403`.
+
+**Why.** This is the vertical slice every later phase plugs into. Retrieval and the real agent will replace only the stub; the stream format, ownership checks and saving stay as built here. Doing it with a fake reply first means the chat UI can be built and tested before any LLM cost or retrieval bug is involved.
+
+**Prompt the AI.**
+
+> Add the chat backend for Phase 3. Routes: `GET /threads`, `POST /threads`, `GET /threads/{id}/messages`, `POST /chat/stream` (body `{threadId, messages}` in AI SDK UI-message format; stream the AI SDK UI message stream over SSE). Use `get_current_user` on every route. Use the user-scoped Supabase client for normal reads and writes so RLS applies; use the service client only to find a thread's owner (return 404 if missing, 403 if it is someone else's) and to create the `users` row. The assistant is a stub that streams a canned reply word by word. Save the user message and assistant message in one insert after the last text chunk and before `finish`; if saving fails, send an error event instead of `finish`. Name a new thread from the first 60 characters of its first question. Keep the files small: `database/chats.py`, `chat/messages.py`, `chat/streaming.py`, `chat/orchestrator.py`, `api/chat.py`. Add unit tests with an in-memory fake store; no network or database.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/chats.py` | `ChatStore`: every chat read/write, plus the ownership lookup |
+| `app/chat/messages.py` | AI SDK message ↔ stored row conversion; pulls the new question out of the request |
+| `app/chat/streaming.py` | Writes the SSE events: `start`, `text-start`, `text-delta`…, `text-end`, `finish`, `[DONE]` |
+| `app/chat/orchestrator.py` | One turn: the stub reply, then saving |
+| `app/api/chat.py` | The four routes and the 403/404 check |
+| `app/main.py` | Registers the router; creates the service client once at startup |
+
+The key idea in `api/chat.py`: everything that can fail with a real HTTP status (401, 403, 404, 422) is checked **before** the `StreamingResponse` is returned. Once streaming starts the status is already `200`, so later failures can only be sent as an error event.
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -q          # 34 passed
+uv run ruff check app tests
+uv run uvicorn app.main:app --port 8000
+curl -i localhost:8000/threads                                 # 401 "Missing bearer token."
+curl -i -H "Authorization: Bearer nope" localhost:8000/threads # 401 "Invalid or expired token."
+```
+
+Not yet verified live: a real signed-in call (`POST /threads`, then `/chat/stream`) against Supabase. That needs a real account's token and is the first thing to try when the chat UI exists.
+
+**Check your understanding.**
+
+- *Why not just use the user-scoped client for the 403 check?* RLS hides other people's rows, so a thread owned by someone else looks exactly like one that does not exist, and you would return 404. The service client can see who owns it.
+- *Why save after streaming instead of before or during?* A dropped connection must not leave half an answer in the database. Saving before `finish` (not after `[DONE]`) lets a failed save surface as an error event.
+- *Why does the server keep only the last message from the request?* The SDK resends the whole conversation each time, but earlier messages are already stored, and the stored copy is the one to trust.
+- *Why do we create the `users` row ourselves?* Nothing does it at sign-up, `chat_threads` has a foreign key to it, and signed-in users can only read that table, so the service client creates it on the first thread.
+
+**Common mistakes.**
+
+- **Assuming the models' defaults apply.** The id (`uuid4`) and `updated_at` (`onupdate`) defaults live in the SQLAlchemy models, but this code writes through the Supabase API, which bypasses them. Without an explicit id the insert fails, and `updated_at` never changes.
+- **Saving both messages in one statement without timestamps.** Both rows get the same database `now()`, so their order is undefined. Set `created_at` explicitly: question first, answer after.
+- **Testing a server on `localhost`.** If another process already listens on that port on IPv6, `curl localhost:PORT` talks to it instead of uvicorn. Use `127.0.0.1` and a fresh port.
+- **Hand-writing the SSE event names from memory.** They differ between AI SDK major versions; re-check them against the installed `ai` package when the frontend chat is added.
+
+### Step 8 — The chat UI (frontend)
+
+**Goal.** A sidebar of past conversations, a "New chat" button, and a chat screen that streams the stub reply and shows saved history after a reload, all behind the sign-in guard.
+
+**Why.** It is the screen every later phase fills in: retrieval, citations and source passages all render inside this message list.
+
+**Prompt the AI.**
+
+> Build the Phase 3 chat UI. Install `ai` and `@ai-sdk/react` and **read their installed type definitions before writing code** (the API changes between major versions). Routes inside `ProtectedRoute`: `/` (empty state) and `/chat/:threadId`, sharing a layout with a sidebar. Sidebar: thread list (title or "New chat"), New chat button (creates the thread through `POST /threads`, then opens it), email and sign out. Chat screen: load stored messages from `GET /threads/:id/messages`, then `useChat` with a `DefaultChatTransport` pointed at `${VITE_API_BASE_URL}/chat/stream` with the Supabase bearer token and `body: { threadId }`. Show "Thinking…" while waiting, a cursor while streaming, a Stop button, and readable errors for 401/403/404 and network failures. No test runner; verify with `tsc`, lint and build.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `src/lib/chat.ts` | Thread calls through `api`, the stream transport (it cannot use `api`: the SDK makes its own request), and `describeError` |
+| `src/components/chat/ChatLayout.tsx` | Layout route; owns the thread list and refreshes it after each reply |
+| `src/components/chat/ThreadSidebar.tsx` | List, New chat, email, sign out |
+| `src/components/chat/ChatThread.tsx` | Loads history, shows loading/403/404 states |
+| `src/components/chat/ChatSession.tsx` | `useChat` itself, one per thread (`key={threadId}`) |
+| `src/components/chat/MessageList.tsx`, `MessageInput.tsx` | Display with auto-scroll; Enter sends, Shift+Enter is a new line |
+| `src/pages/ChatHomePage.tsx`, `ChatThreadPage.tsx` | Route-level pages |
+
+**Verify.**
+
+```bash
+cd frontend
+pnpm tsc --noEmit && pnpm lint && pnpm build
+```
+
+The real check is manual, signed in: New chat → send a message → watch the reply stream → reload → the conversation is still there, and the sidebar title is your first question. Before that, the wire format was checked by running the real SDK `Chat` class in Node against the real FastAPI routes (fake user and store): status went `submitted → streaming → ready` with no error and the reply assembled correctly.
+
+**Check your understanding.**
+
+- *Why can't the stream use `api.post`?* `api` waits for a whole JSON response; the SDK needs to read the response as it arrives, so it does its own `fetch`. It reuses `getAccessToken` for the same token.
+- *Why `key={threadId}` on the chat?* `useChat` keeps its state per mounted component. A new key throws the old state away, so one thread's messages never leak into another.
+- *Why load history before mounting `useChat`?* The hook takes its starting messages once. Mounting it before the history arrives would start the chat empty.
+
+**Common mistakes.**
+
+- **Writing SDK code from memory.** The installed packages were `ai` 7 and `@ai-sdk/react` 4, newer than most tutorials. Reading the `.d.ts` files first took minutes and avoided guessing event names.
+- **Testing on `localhost` against a server bound to `127.0.0.1`** (or the reverse). Pin the host (`--host 127.0.0.1`) and use that address in the URL.
+- **Calling a state-setting function from `useEffect`.** The linter flags it; do the fetch inside the effect with a `cancelled` flag so leaving the page cancels it.
+
+---
+
+## Part 4 — The corpus and retrieval (backend)
+
+### Step 9 — Chunk, embed and store the filings
+
+**Goal.** Every filing in `source_documents` is split into chunks, each chunk is embedded, and the rows are stored in `document_chunks` with the section and filing details. Re-running never embeds (or pays for) a chunk twice.
+
+**Why.** Retrieval can only find what is stored as small, embedded, searchable pieces. A whole 10-K is far too big to send to a model, and one vector per filing would blur everything together.
+
+**Prompt the AI.**
+
+> Add chunk ingestion. `app/embeddings.py`: an async client for the Azure OpenAI v1 API (the plain OpenAI SDK pointed at the resource URL; `model` is the Azure *deployment name*) and `embed_texts`, which returns one vector per text and fails loudly if the size is not 1536. `ingest/chunking.py`: split a filing's Markdown into chunks of at most 512 tokens, keeping tables intact, and record each chunk's section headings. `ingest/ingest_chunks.py`: read `source_documents`, chunk and embed in batches, insert rows with `chunk_index`, `section`, `token_count`, `embedding` and `chunk_metadata` (ticker, form, fiscal year, filing date, accession number, headings). Never send `search_vector`: Postgres generates it. Skip chunks already stored for a document. Flags: `--dry-run`, `--accession`, `--chunk-index`, `--force`. Add unit tests for chunking and embeddings with no network.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/embeddings.py` | Embedding client and `embed_texts`; used by ingestion now and by retrieval for the question |
+| `ingest/chunking.py` | Markdown → `Chunk` objects (content, section, headings, token count) |
+| `ingest/ingest_chunks.py` | The script: chunk, embed, insert, skip what is stored |
+| `app/config.py` | Gains `azure_openai_endpoint` (required, placeholder-checked) |
+
+**Verify.** Do it small before doing it big:
+
+```bash
+cd backend
+uv run python ingest/ingest_chunks.py --dry-run --accession 0000320193-25-000079   # 130 chunks, max 512 tokens
+uv run python ingest/ingest_chunks.py --accession 0000320193-25-000079 --chunk-index 49
+uv run python ingest/ingest_chunks.py --accession 0000320193-25-000079 --chunk-index 49  # "skipped 1 already stored"
+uv run python ingest/ingest_chunks.py                                                    # everything
+```
+
+The one-chunk run stored Apple's FY2025 iPhone revenue table (485 tokens, 1536-number vector, section "Item 7. Management's Discussion…", `search_vector` filled in by Postgres). The full run finished with 40 filings and **11,240 chunks**, about 1.1M tokens billed on the final run.
+
+**Check your understanding.**
+
+- *Why test one chunk first?* A wrong deployment name, key or column fails on the first call. Finding that out on one chunk costs nothing; finding it out 5,000 chunks in costs money.
+- *Why store `ticker`, `fiscal_year` and the rest inside every chunk?* Retrieval filters and citations need them, and it saves a join on every search.
+- *Why is `search_vector` never sent?* It is a generated column; Postgres rebuilds it from `content` on every insert, so it can never drift out of sync.
+- *How does a re-run know what to skip?* It lists the `chunk_index` values already stored for the document and embeds only the rest.
+
+**Common mistakes.**
+
+- **Using the model name where Azure wants the deployment name.** `OPENAI_EMBEDDING_MODEL` must be the name you gave the deployment.
+- **A missing `AZURE_OPENAI_ENDPOINT`.** Settings fail on startup, so even `--dry-run` refuses to start. The client accepts the URL with or without the trailing `/openai/v1`.
+- **Treating a crash as a restart.** The first full run died on a network error (`httpx.ReadError`) in the middle of an insert. Because chunks are skipped when already stored, re-running the same command finished the job and billed only the rest.
+- **Piping a long run through `tail`.** The output only appears when the command ends, so you see nothing while it works. Redirect to a log file instead.
+
+### Step 10 — Hybrid retrieval: semantic search, keyword search, fusion
+
+**Goal.** `retrieve(engine, client, question, top_k, ticker, fiscal_year)` returns the best passages for a question: each with its fused score and the chunks on either side of it.
+
+**Why.** Meaning search finds a passage worded differently from the question; keyword search finds exact terms such as "iPhone" or a figure. Each misses what the other catches, so both run and their rankings are merged.
+
+**Prompt the AI.**
+
+> Add retrieval under `app/retrieval/`. `queries.py`: a pgvector cosine-distance search over `document_chunks.embedding`, a full-text search over `search_vector`, and a fetch of chunks by (document, index); each returns a small `ChunkHit` dataclass and takes optional `ticker` and `fiscal_year` filters. `fusion.py`: Reciprocal Rank Fusion in plain Python, no library. `retriever.py`: embed the question, run both searches concurrently, fuse them, keep the top `top_k`, and attach neighbouring chunks. The Supabase API client cannot order by vector distance, so add `app/database/engine.py` with an async SQLAlchemy engine on `DATABASE_URL`. Unit tests with no network or database.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/engine.py` | `create_search_engine()`: async engine for the retrieval queries |
+| `app/retrieval/queries.py` | `semantic_search`, `keyword_search`, `get_chunks`, `or_tsquery` |
+| `app/retrieval/fusion.py` | `reciprocal_rank_fusion`; `RRF_K = 60` |
+| `app/retrieval/retriever.py` | `retrieve` and the `Passage` result |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/retrieval -q       # 6 passed
+uv run ruff check app tests
+```
+
+Live, against the full corpus: "What was Apple's iPhone net sales revenue?" (ticker AAPL) returned the Item 7 MD&A chunks, and "How much revenue came from data center for NVIDIA?" (ticker NVDA) returned the Data Center revenue passages first. These were checked by eye, not by an automated test; an evaluation set comes later. To try your own questions, run `uv run python scripts/try_retrieval.py "your question" --ticker NVDA`; `app/retrieval/README.md` has the flow diagram and every default (top 8, 30 candidates per search, 1 neighbour each side, `RRF_K` 60).
+
+**Check your understanding.**
+
+- *Why does RRF use ranks, not scores?* Vector distances and text-search ranks are on different scales. Ranks are comparable, so there is nothing to normalise. A chunk found by both searches beats one found by only one.
+- *What is `RRF_K = 60`?* It softens the gap between neighbouring ranks (`1 / (60 + rank)`). 60 is the value from the original paper; change it only if an evaluation shows a reason.
+- *Why OR the keywords?* Postgres's usual query helpers AND every word, so one word the filing never uses returns nothing. ORing the words and ranking with `ts_rank_cd` suits a question-shaped query. Keeping only letters and digits also stops user text from injecting query syntax.
+- *Why fetch neighbours?* A table or an explanation often runs across two or three chunks; the hit alone can cut it off.
+
+**Common mistakes.**
+
+- **Forgetting `greenlet`.** SQLAlchemy's async mode needs it. Install `sqlalchemy[asyncio]`, not plain `sqlalchemy`.
+- **Running async psycopg on Windows' default event loop.** It fails with "cannot use the ProactorEventLoop". Use `SelectorEventLoop` for local scripts; Linux (Railway) is unaffected.
+- **Searching all companies at once.** A question like "which company had supply-chain risk?" with no ticker returned only JPMorgan risk-management sections: the query matched "risk", and JPM has several times more chunks than the others. Filter by ticker, or search each company separately and compare.
+- **Putting `-` or `&` characters from user text into a text-search query.** Always build the query from sanitised words, never from raw input.
+
+## Part 5 — The document agent (backend)
+
+### Step 11 — The agent's tools (`app/assistant/tools.py`)
+
+**Goal.** Three bounded tools the agent can call to read the filings: `search_filings(query, ticker, fiscal_year)`, `read_chunk(chunk_id)` and `read_surrounding_chunks(chunk_id, window)`. Every passage a tool returns is recorded in `deps.retrieved`.
+
+**Why.** The model can only read through these tools, so it cannot invent SQL. Recording what was returned makes citation checking exact: later, a citation is accepted only if its chunk id was actually shown to the model this turn.
+
+**Prompt the AI.**
+
+> Add `app/assistant/tools.py` with three PydanticAI tools. `search_filings` wraps `retrieve()` (with `neighbor_window=0`) and takes `ticker` as a `Literal` of the 8 tickers, so a made-up company is rejected before the database. `read_chunk` and `read_surrounding_chunks` (window 1 to 3) reuse `queries.get_chunks`, plus one new query `get_chunk_by_id` in `app/retrieval/queries.py`. Each tool returns numbered passages with the chunk id and filing metadata (ticker, form, fiscal year, filing date, section), and records every returned chunk in `ctx.deps.retrieved`. An unknown chunk id raises `ModelRetry` so the model can correct itself. Unit tests with a faked retriever and faked queries; no database, model or network.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/deps.py` | `DocumentAgentDeps`: the engine, the embedding client, and the per-turn `retrieved` dict |
+| `app/assistant/tools.py` | `search_filings`, `read_chunk`, `read_surrounding_chunks`, `Ticker`, `MAX_WINDOW = 3` |
+| `app/retrieval/queries.py` | New `get_chunk_by_id` |
+| `tests/assistant/test_tools.py` | Filters passed through, `retrieved` filled, unknown id retried, ticker enum, window bounds |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/assistant/test_tools.py tests/retrieval/test_queries.py -q   # 17 passed
+uv run ruff check app tests
+```
+
+The bad-ticker check asserts that the tool's schema lists exactly the 8 tickers; PydanticAI enforces that list when the model calls the tool, so the test does not call the tool with a bad value.
+
+**Check your understanding.**
+
+- *Why record chunks in `deps.retrieved`?* The grounding validator will accept a citation only if its chunk id is in that dict. The model cannot cite a passage no tool showed it.
+- *Why is `retrieved` created fresh each turn?* One turn's evidence must not leak into the next, or an old chunk could justify a new answer.
+- *Why `neighbor_window=0` in search?* Search replies stay small. The model asks for surrounding text with `read_surrounding_chunks` only when a result looks cut off.
+- *Why `ModelRetry` for an unknown id, not an error?* The message goes back to the model, which can then use an id from a search result instead of the whole run failing.
+
+**Common mistakes.**
+
+- **Letting tools hit the database with free-form input.** Keep the parameters typed and bounded (`Literal` ticker, `window` between 1 and 3).
+- **Returning text without recording it.** A tool that skips `present()` shows the model a passage that the validator will later refuse to accept as a citation.
+- **Clamping the window start.** Near the start of a document, `chunk_index - window` goes negative; the range starts at 0.
+
+### Step 12 — The agent (`app/assistant/agent.py`)
+
+**Goal.** `create_agent()` returns a PydanticAI agent that searches with the three tools and must answer as a `GroundedAnswer`. `answer_question()` runs one question and returns the answer with the passages it cites.
+
+**Why.** A retry is cheap and fixes most citation slips, so the model gets one chance to repair its citations before the question is refused. Per-question caps keep cost and runaway tool loops predictable.
+
+**Prompt the AI.**
+
+> Add `app/assistant/agent.py`. `create_agent(model=None)` builds `Agent(model, deps_type=DocumentAgentDeps, output_type=GroundedAnswer, instructions=<instructions.md>, tools=[the three tools], retries={"output": 1, "tools": 1})`. Add an output validator that calls `grounding.validator.validate` against `ctx.deps.retrieved` and turns a `GroundingError` into `ModelRetry` with its message. `answer_question(agent, deps, question, history)` runs the agent with `UsageLimits` (model requests, tool calls, total tokens, all from settings) and returns the answer plus the cited `SourcePassage`s. Tests use PydanticAI's `FunctionModel` with a scripted model and a faked retriever, and must test the grounding contract, not only the plumbing.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/agent.py` | `create_agent`, the grounding output validator, `answer_question` with usage limits |
+| `app/assistant/instructions.md` | The product contract sent to the model on every turn |
+| `tests/assistant/test_agent.py` | The grounding contract and the caps, with a scripted fake model |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest tests/assistant -q       # 43 passed
+uv run ruff check app tests
+```
+
+The tests cover: a grounded answer passes and carries its passages; an honest "not enough evidence" answer passes without citations; an uncited answer is retried once and accepted when fixed (and the retry message names the problem); an invented chunk id is rejected after exactly one retry; citing without ever searching is rejected; the model is sent the instructions and exactly the three tools; a model that searches forever is stopped by the tool-call cap.
+
+**Check your understanding.**
+
+- *Why validate in code, not trust the prompt?* The prompt asks for honest citations; the validator proves them. It compares each cited chunk id with what the tools returned this turn, whatever the model says.
+- *Why does the retry message list every broken rule?* So one retry can fix them all.
+- *Why a cap on tool calls?* A model can loop on searches. The cap ends it with `UsageLimitExceeded`, which the chat layer turns into a "try a narrower question" reply.
+- *Why `FunctionModel`, not a real model?* The tests must run with no network and still exercise the retry behaviour, which needs a model that returns scripted, deliberately bad answers.
+
+**Common mistakes.**
+
+- **Testing only that the agent runs.** A fake model that always answers well proves nothing about grounding. Script a bad answer and assert it is retried and then rejected.
+- **Letting history supply evidence.** Earlier answers carry no chunk ids, so they give context only. The agent must search again to cite.
+
+### Step 13 — Run the agent in the chat turn, and stream its sources (`app/chat/orchestrator.py`)
+
+**Goal.** `run_turn` loads the thread's history, runs the agent, streams the validated answer a word at a time, then sends a `data-citations` part carrying the sources, and saves the exchange before `finish`.
+
+**Why.** This is the only place the chat flow changes: the stubbed reply is replaced by the agent. Streaming the sources lets the UI show the exact passage behind each `[n]` marker, and saving them means a reloaded thread shows the same sources.
+
+**Prompt the AI.**
+
+> In `app/chat/orchestrator.py`, replace the stubbed reply with `answer_question`. Stream the answer text as today, then send a `data-citations` data part: one entry per citation with its `[n]` marker and the passage (ticker, form, fiscal year, filing date, accession number, section, exact excerpt). Save the same part in the assistant message's `parts`. Keep the title logic and the rule that the turn is saved before `finish`. A grounding failure or a cap hit streams a plain explanation, saved with a `data-turn-failed` marker so the question stays in the thread but out of later history. A service failure sends an `error` event and saves nothing. Send no citations part when there are no sources. Tests with a fake agent run.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/chat/orchestrator.py` | `run_turn`: history, agent, stream, citations, save |
+| `app/chat/streaming.py` | `ui_message_stream` takes `data_parts`, sent after `text-end` and before the save |
+| `app/chat/messages.py` | `citation_parts` and `CITATIONS_PART_TYPE = "data-citations"`; `to_model_history` turns stored messages into the agent's context |
+| `app/api/chat.py` | `get_agent` (shared) and `get_agent_deps` (fresh per request, so `retrieved` starts empty) passed into `run_turn` |
+| `app/main.py` | The lifespan builds the search engine, embedding client and agent once, and disposes the engine on shutdown |
+| `app/config.py` | `agent_max_tool_calls` (15), `agent_max_model_requests` (20), `agent_max_total_tokens` (500,000), `agent_history_messages` (10) |
+| `app/assistant/instructions.md` | New section: earlier messages are context only and cannot be cited; markers restart at `[1]` each answer |
+| `scripts/ask.py` | Chat with the agent in the terminal and see the sources behind each answer (real model and database, nothing saved) |
+
+The stream for a cited answer is: `start`, `text-start`, `text-delta` (many), `text-end`, `data-citations`, then the save, then `finish` and `[DONE]`.
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 137 passed
+uv run ruff check app tests
+```
+
+New tests: a cited answer streams `data-citations` between `text-end` and `finish`, with the marker and exact excerpt; the saved parts are the text plus the same citations part that was streamed; an answer with no sources sends and saves no citations part; a grounding failure sends no sources; `ui_message_stream` orders data parts before the save.
+
+**Check your understanding.**
+
+- *Why are the sources sent after the text?* The passages are known only once the agent has finished and the answer is validated, so there is nothing to send while the text streams.
+- *Why does a grounding failure save an explanation, not nothing?* The user's question stays in the thread and nothing unsupported is shown. A service failure is different: it is not the question's fault, so nothing is saved and the user simply retries.
+- *Why the `data-turn-failed` marker?* Without it, the explanation would be replayed to the model as if it were an earlier answer.
+- *Why keep the excerpt in the saved part?* It is the text as it was when cited, so the thread stays correct even if a filing is re-ingested later.
+
+**Common mistakes.**
+
+- **Sharing one `DocumentAgentDeps` across requests.** The agent, engine and client are built once, but the deps (and their `retrieved` dict) are made per request. Otherwise one user's evidence could justify another user's citation.
+- **Replaying failed exchanges as history.** `to_model_history` drops a failed question and its explanation as a pair, and starts and ends the history on a user and an assistant message.
+- **Dropping the passages the agent returns.** The first version of this step discarded them, so the answer streamed with `[1]` markers and no way to see what `[1]` was.
+- **Sending an empty citations part.** An answer that cites nothing should have no `data-citations` part at all.
+- **Saving after `finish`.** The client would show a message that was never stored.
+- **Frontend not yet updated.** The UI ignores unknown `data-` parts, so nothing breaks, but the sources do not show until the citations step is added to the chat UI.
+
+### Step 14 — Save the sources, and check the stream format (`app/database/chats.py`)
+
+**Goal.** Each cited answer is saved with its sources in two places: inside the message's `parts` (so a reloaded thread shows them) and as `message_citations` rows (so they can be queried). The stream's citation chunk is checked against the installed AI SDK.
+
+**Why.** The UI needs the sources live and after a reload. The rows copy the excerpt and section at answer time, so an old answer keeps showing what it cited even if a filing is re-ingested and its chunks are replaced (`chunk_id` becomes null, the snapshot stays).
+
+**Prompt the AI.**
+
+> First check the data-part chunk shape against the installed `ai` package in `frontend/node_modules`. Then extend `ChatStore.save_turn` with an optional `citations` list. After the two messages are inserted, insert one `message_citations` row per source: `chunk_id`, `citation_index` (the `[n]` marker), `excerpt`, `section`, `page` as null. If that insert fails, delete the two messages (their citations cascade) and re-raise, so an error means nothing was stored. The orchestrator passes the streamed sources to `save_turn`. Tests: the rows built, the order of the requests with a fake Supabase client, and a save-then-reload round trip with the fake store.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/database/chats.py` | `citation_rows` and the extended `save_turn` |
+| `app/chat/orchestrator.py` | Passes `citations=` to `save_turn` |
+| `tests/database/test_chats.py` | Rows, request order, cleanup on failure |
+| `tests/conftest.py` | `FakeStore.save_turn` also keeps the messages, so a test can reload the thread |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 142 passed
+```
+
+Stream format: in `frontend/node_modules/ai` (7.0.173) the data chunk is `{type: "data-<name>", id?, data, transient?}` with any `data-` prefix accepted. Our `{"type": "data-citations", "data": [...]}` matches. Check this again whenever the `ai` package is upgraded; chunk names have changed between major versions.
+
+**Check your understanding.**
+
+- *Why store sources in `parts` and in rows?* `parts` is what the UI reloads, with no joins. The rows are for questions such as "which answers cited this passage?".
+- *Why copy the excerpt instead of joining to the chunk?* Re-ingesting replaces chunks. The foreign key is `ON DELETE SET NULL`, so the old answer keeps its text.
+- *Why not one transaction?* The Supabase API is one request per call, so the citation insert cannot join the message insert. The cleanup delete restores "saved together or not at all".
+- *Why save the thread update last?* A failed save then leaves the thread's order and title unchanged.
+
+**Common mistakes.**
+
+- **Trusting the chunk name from memory.** Read it from the installed package.
+- **Leaving the exchange behind when the citation insert fails.** The user sees an error, asks again, and the thread now holds the question twice.
+- **Using the user client for the cleanup.** It is correct: row-level security lets users delete only their own messages, which is all the cleanup needs.
+
+### Step 15 — Wire it into the app (`app/main.py`, `app/api/chat.py`)
+
+**Goal.** The search engine, the embedding client and the agent are created once at startup and shared by every request. Each request gets its own `DocumentAgentDeps` around them and passes it to `run_turn`.
+
+**Why.** Engines and clients hold connection pools, so building them per request would pay that cost every time. The evidence dict is the opposite: it must start empty each turn, or one user's retrieved passages could justify another user's citation. This follows the pattern `service_client` already used.
+
+**Prompt the AI.**
+
+> In the `lifespan` in `app/main.py`, create the search engine (`create_search_engine()`), the embedding client and the agent once and keep them on `app.state`; dispose the engine on shutdown. In `app/api/chat.py` add two dependencies: `get_agent`, which returns the shared agent, and `get_agent_deps`, which builds a fresh `DocumentAgentDeps` per request from the shared engine and client. Pass both into `run_turn`. psycopg's async mode cannot run on Windows' default event loop, so make `python -m app.main` start uvicorn on the selector loop; leave Linux alone. Test that requests share the engine and client but not `retrieved`.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/main.py` | Lifespan builds and disposes the shared pieces; `__main__` starts uvicorn on the selector loop |
+| `app/api/chat.py` | `get_agent` (shared) and `get_agent_deps` (fresh per request), injected into the stream endpoint |
+| `tests/api/test_wiring.py` | The agent is the startup one; engine and client are shared; `retrieved` is not |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 144 passed
+uv run python -m app.main               # then, in another terminal:
+curl http://127.0.0.1:8000/health       # {"status":"ok"}
+```
+
+The server logs "Application startup complete" with the real `.env`, and shutting it down logs "Application shutdown complete" (the engine is disposed first).
+
+**Check your understanding.**
+
+- *Why is the agent shared but the deps are not?* The agent holds no per-user state. The deps hold `retrieved`, which is per turn.
+- *Why does the Windows fix live in `__main__` only?* Railway runs on Linux, which has no such problem, so the production start command stays plain.
+- *Why dispose the engine on shutdown?* It closes the pool's connections cleanly instead of leaving them for the database to time out.
+
+**Common mistakes.**
+
+- **Starting with plain `uvicorn app.main:app` on Windows.** It uses the Proactor loop, and the first retrieval query fails with "cannot use the ProactorEventLoop". Use `python -m app.main` (or `--reload`, which uses the selector loop).
+- **Port 8000 already in use.** A second server fails to bind with "only one usage of each socket address", yet the old one still answers `/health`, so a health check can pass while your new code is not the one running. Check what is listening first.
+- **Building the deps once at startup.** Every turn would then share one `retrieved` dict.
+
+### Step 16 — Live verification against the client brief (`scripts/ask.py`)
+
+**Goal.** Run the 10 brief questions, plus a vague one and an out-of-corpus one, through the whole agent against the real model and database, and record what happens in [docs/live_verification.md](docs/live_verification.md).
+
+**Why.** Unit tests prove the rules. Only live runs show whether the model follows them and whether retrieval is good enough. This is where the real problems showed up.
+
+**Prompt the AI.**
+
+> Extend `scripts/ask.py` so it can read questions from a file (`--file`, one per line) and ask each one with no earlier conversation (`--independent`), and print how long each took. Put the 10 brief questions plus "How are they doing?" and a question about a company outside the corpus in `scripts/brief_questions.txt`. Run them, check each answer's citations, and write a results table in `docs/`. Log why the grounding validator rejects an answer. Feed failures back into the instructions or tools. Note which brief questions assume five companies while the corpus has eight.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `scripts/ask.py` | `--file`, `--independent`, timing |
+| `scripts/brief_questions.txt` | The 12 questions |
+| `docs/live_verification.md` | The results table, findings, fixes and open problems |
+| `app/assistant/agent.py` | Logs `answer_not_grounded` with the validator's problems |
+
+**Verify.**
+
+```bash
+cd backend
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+```
+
+This costs a few cents per question and takes a few minutes. Expect it to vary from run to run.
+
+What the first runs showed (details in `docs/live_verification.md`):
+
+- The vague question and the Netflix question both passed: the first asked which company, the second said Netflix is not in the corpus.
+- No answer reached the user with a chunk the tools had not returned.
+- Questions 2, 4, 8 and 10 sometimes ended in "could not answer", and question 10 (the required refusal to infer that AI improved margins) never produced an answer in the runs after the log was added.
+- Questions 6 and 9 need more tool calls than the cap allowed. The cap went from 15 to 25.
+- Question 6 says "the five companies", but the corpus has eight.
+
+**Check your understanding.**
+
+- *Why log the validator's problems?* A failed question used to say only "output retries exceeded". With the reasons logged, the cause was visible: invented or garbled chunk ids, one marker used for two chunks, and listed citations the text never uses.
+- *Why does the bot refuse so often on the biggest answers?* A long answer has many citations, and each is a 36-character id the model must copy exactly. One retry is not enough when a few are wrong.
+- *Why did the answers still have raw chunk ids and grouped markers?* The validator only checks that markers and citations agree. The format is asked for in the prompt, not enforced in code.
+
+**Common mistakes.**
+
+- **Judging one run.** The same question answered in one run and failed in the next. Repeat the runs that fail before deciding what is wrong.
+- **Treating "no answer" as a pass because nothing was invented.** It is the safe failure, but a question 10 that never answers has not shown that the bot refuses correctly.
+- **Changing the prompt and calling it fixed.** The instruction changes helped little. The likely fixes are in code: short per-turn ids instead of UUIDs, and format checks in the validator.
+- **Running the whole brief as one conversation.** Later questions then see the earlier ones. Use `--independent`.
+
+### Step 17 — Short source ids, and enforce the answer format in code
+
+**Goal.** The model cites passages by short ids (`S1`, `S2`...), never UUIDs. A validator rule rejects badly formatted answers, and the prompt shows a good and a bad example. Question 10 (do not infer that AI improved margins) is checked live.
+
+**Why.** Step 16 showed the main reasons for refusals: the model garbled 36-character ids in long answers, and the format asked for in the prompt (markers next to each claim, no ids or source lists in the text) was not followed. A program can check the format; a prompt can only ask.
+
+**Prompt the AI.**
+
+> Replace chunk ids with short per-turn ids. `DocumentAgentDeps` gets `labels` (chunk id to `S1`...), `label_for` and `chunk_id_for`. Tools show `[source_id=S1]`, and `read_chunk` and `read_surrounding_chunks` take a `source_id` and send the model back to retry on an unknown one. `Citation` has `source_id`, not `chunk_id`. The validator maps ids through `labels`. Add validator rule 5 (format): no id in the answer text, no block of six or more markers, no sentence repeated, at most 20 citations, and no paragraph that states a figure (`$`, `%`, `201,183`, `5 billion`) without a marker. Put a good and a bad example in the instructions. Make the number of output retries a setting. Unit tests for every rule; then re-run the brief live.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/deps.py` | `labels`, `label_for`, `chunk_id_for` |
+| `app/assistant/tools.py` | `[source_id=S1]` headers; read tools take a `source_id` |
+| `app/assistant/outputs.py` | `Citation.source_id` |
+| `app/grounding/validator.py` | Rule 5: `format_problems`, `MAX_CITATIONS` |
+| `app/assistant/instructions.md` | The example, and "a marker is not a source id" |
+| `app/config.py` | `agent_output_retries` (2) |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 163 passed
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+```
+
+Live results are in `docs/live_verification.md` (round 2). Step 18 then moves the numbering of markers out of the model. In short: no invented ids in any run; three to six answers out of ten refused; Question 10 gave the right refusal when it answered.
+
+**Check your understanding.**
+
+- *Why short ids?* A model copies "S14" reliably and a 36-character UUID unreliably. The mapping stays in the program, so the model cannot write a real-looking UUID that is wrong.
+- *Why put the format in the validator and not only the prompt?* The prompt got ignored (raw ids, a block of markers at the end). A rule in code rejects the answer and tells the model exactly what to fix.
+- *Why did a new rule produce a new failure?* "No block of markers" made the model repeat one sentence once per source. Rules push a model toward whatever still passes, so they need to be checked live and then tightened.
+- *Is a refusal good?* It is the safe failure. But a refusal rate of three to six in ten means the product is not ready; the open items in the results doc are about bringing it down.
+
+**Common mistakes.**
+
+- **Short ids that look like marker numbers.** With `S14` and `[14]` the model wrote `[14]` meaning source `S14`. Tell it plainly that markers count 1, 2, 3 in order of use and are not ids.
+- **Reading a pass as success.** The 64-copies answer for Question 10 passed validation. Read the answers, not only the counts.
+- **A rule that is too strict.** Four markers in a row refused honest answers about a five-year trend. The limit is six.
+- **Testing with the default retry count.** Tests that script exactly one retry must set `agent_output_retries` to 1, or they break when the default changes.
+
+### Step 18 — The program numbers the markers, and a vague question is asked back
+
+**Goal.** The model marks claims with the source id (`[S3]`). The program renumbers them `[1]`, `[2]`... in order of first use and builds the citation list. A source list written into the answer is removed. A question that names no company or topic is asked back, not searched.
+
+**Why.** After Step 17 the main refusals were the model numbering its own markers wrongly (`[14]` for source `S14`) and a citation list that disagreed with the text. If the program does the numbering, those failures cannot happen. Fixing what can be fixed in code is cheaper and more reliable than asking the model again.
+
+**Prompt the AI.**
+
+> Split the answer type in two. `ModelAnswer` (the agent's output) has only `answer`, with `[S3]`-style markers, and `enough_evidence`. `GroundedAnswer` extends it with `citations`. Add `ground(answer, retrieved, labels)` to the validator: remove a source list the model wrote into the text, reject numbered markers such as `[1]` with an instruction to use `[S3]`, expand `[S3, S5]` into `[S3][S5]`, number the markers in order of first use, build the citations, then run every existing rule. The agent's output validator and `answer_question` both call `ground`. Rewrite the instructions for `[S3]` markers, with a good and a bad example, and add a first rule: if the question names no company and no topic, do not search; ask which company, topic and year. Run the brief live, read the rejection reasons from the log, and tune rules that are too strict.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `app/assistant/outputs.py` | `ModelAnswer` (what the model writes), `GroundedAnswer` (checked and numbered) |
+| `app/grounding/validator.py` | `ground`, `tidy`; markers `SOURCE_MARKER`, `SOURCE_GROUP`; `MAX_CITATIONS = 40` |
+| `app/assistant/agent.py` | Output type `ModelAnswer`; validator and `answer_question` call `ground` |
+| `app/assistant/instructions.md` | `[S3]` format, example, and "check the question first" |
+| `tests/grounding/test_validator.py` | Numbering order, group expansion, source list removed, unknown id, numbered markers rejected |
+| `tests/assistant/test_agent.py` | The program numbers the markers; a model that numbers its own is told how to cite |
+
+**Verify.**
+
+```bash
+cd backend
+uv run pytest -m "not integration" -q  # 173 passed
+uv run python scripts/ask.py --file scripts/brief_questions.txt --independent
+uv run python scripts/ask.py --independent "How are they doing?" "Any news?"   # no search, asks which company
+```
+
+Live results are in `docs/live_verification.md` (round 3): seven to ten of ten questions answered over five runs, no invented ids, no marker mismatches, and Question 10 refuses to infer a link between generative AI and margins.
+
+**Check your understanding.**
+
+- *Why can the program number the markers when the model cannot?* Numbering needs one pass over the text in order of first use, which is trivial for a program and error-prone for a model that must also write the answer.
+- *Why remove a source list instead of refusing the answer?* The answer is fine apart from the list, and the app shows the sources itself. Refusing would cost the user an answer for nothing.
+- *Why did the vague-question test start failing?* More text in the instructions diluted the rule, so the model began "helpfully" summarising all eight companies. A rule that matters needs to be stated first and plainly, and re-tested after the prompt changes.
+- *Why look at the rejection reasons, not the pass rate?* The counts said "7 of 10". The reasons said which two rules were too strict, which was something to change.
+
+**Common mistakes.**
+
+- **Treating a high pass rate as done.** One run said 10 of 10 while the vague question was wrong. Check every behaviour, not the total.
+- **Making a rule stricter without reading what it rejects.** A dump limit of six refused honest trends; ten was still the largest reason. Read examples before tuning.
+- **Counting on one run.** Answers vary a lot; the same question passed and failed on consecutive runs.
+- **Trusting `enough_evidence`.** A correct "the filings do not prove this" answer for Question 10 came back with `enough_evidence=True`.
+
+---
+
+## Part 6 — The trust UI (frontend)
+
+### Step 19 — Citation chips and the source panel
+
+**Goal.** Every cited answer shows its sources. Each `[n]` in the text is a button, a row of chips under the answer names each source (company, form, fiscal year, section), and clicking either opens a panel with the exact passage, the filing date, the section and the accession number.
+
+**Why.** An analyst should be able to check any claim in one click. The backend already streams a `data-citations` part after the text and saves the same part, so the frontend only has to read it. Reading it from the message parts means the sources also show after a reload.
+
+**Prompt the AI.**
+
+> In the frontend, read the `data-citations` part of an assistant message (marker, ticker, form, fiscal year, filing date, accession number, section, excerpt). Turn each `[n]` in the answer text into a button, show a row of source chips under the answer, and open a side panel with the exact excerpt when either is clicked. Mark a reply that only explains why no answer was given. No new packages, no frontend tests: verify with the type checker, the linter, the build and the browser. First check, with the installed `ai` package, that it produces the part the UI expects.
+
+**What you should get.**
+
+| File | Job |
+| ---- | --- |
+| `src/lib/citations.ts` | `Source`, `sourcesOf` (reads the part), `isFailedReply`, `splitMarkers`, labels and dates |
+| `src/components/chat/AnswerText.tsx` | The answer text with each `[n]` as a button |
+| `src/components/chat/SourceChips.tsx` | The chips under an answer |
+| `src/components/chat/SourcePanel.tsx` | The side panel: filing details and the exact passage; Escape closes it |
+| `src/components/chat/MessageList.tsx` | Renders the above; "No answer given" label; "Searching the filings…" while waiting |
+| `src/components/chat/ChatSession.tsx` | Holds the selected source and shows the panel beside the chat (full screen on a phone) |
+
+**Verify.**
+
+```bash
+cd frontend
+pnpm tsc --noEmit -p tsconfig.app.json
+pnpm lint
+pnpm build
+```
+
+All three pass (lint shows one existing warning in `button.tsx`). The installed `ai` package (7.0.173) turns the backend's stream into a message with a `text` part and a `data-citations` part carrying the excerpt, which is exactly what `sourcesOf` reads. This was checked by feeding a stream to `readUIMessageStream` in a script.
+
+In the browser (not yet done; it is the open Phase 7 item): start the backend and `pnpm dev`, sign in, ask "What was Apple's iPhone net sales revenue in fiscal 2025?", then check:
+
+1. The answer has numbered buttons and chips under it.
+2. Clicking `[1]` or its chip opens the panel with the exact text from the filing.
+3. Reload the page: the buttons, chips and panel still work.
+4. Ask "How are they doing?": the reply asks which company and shows no chips.
+
+**Check your understanding.**
+
+- *Why read the part from the message and not keep a separate list?* The message is what the SDK streams and what the backend stores, so the same code shows the sources live and after a reload.
+- *Why does a marker without a source stay as plain text?* An older message or a stray number must not become a dead button.
+- *Why show the whole excerpt?* The point is to check the claim against the text, and the backend saves the excerpt as it was when cited, so it stays right even if a filing is later re-ingested.
+- *Why is the panel full screen on a phone?* A 24 rem side column does not fit beside the chat there.
+
+**Common mistakes.**
+
+- **Assuming the chunk name.** The SDK accepts any `data-` type, so `data-citations` works, but check it in the installed package whenever `ai` is upgraded.
+- **Forgetting the panel when the message is not found.** The panel looks the source up from the messages every render; if the message is gone it closes, instead of showing stale text.
+- **Unticking nothing.** Phase 7's "click a citation, see the exact passage" stays open until someone has done it in a browser.
+
+### Step 20 — Markers where the facts are (claims, not free text)
+
+**What and why.** Before, the model wrote the whole answer and typed its own `[n]` markers, which ended up bunched at the end of a sentence and sometimes pointed at the wrong passage. Now the model returns a list of **claims**: one statement each, with the short source ids it rests on. The program builds the answer text and places each marker itself.
+
+**How it works.**
+
+- `outputs.py`: a `Claim` has a `kind` (fact, calculation or note), a `text` and a list of `sources`. The model answers with `claims` and `enough_evidence`.
+- `grounding/validator.py`: `ground()` checks every claim, then composes the answer. A figure in a claim must appear in the text of one of the passages it cites (million and billion are converted). A figure that is nowhere in them is rejected, and the model retries; if it still fails, the question is refused. Notes ("the filings do not state X") carry no figures and no sources.
+- The program puts a marker right after each figure, using the passage that contains that figure (a year next to the figure picks between filings). Markers are numbered by order of appearance.
+- Frontend: markers are small superscripts next to the figure. Clicking one opens the passage with that figure highlighted.
+
+**Check your understanding.**
+
+- *Why not let the model place the markers?* It does not reliably know which passage a number came from; the program does.
+- *What does the figure check not catch?* A true number used with the wrong meaning. It proves the number is in the cited passage, not that the sentence is a fair reading of it.
+
+**Status.** Unit tests pass. Live runs after the last tuning were cut short by the database connection limit, so the refusal rate is not yet re-measured (earlier rounds: 7 to 10 of 10 answered).
+
+### Step 21 — Managing chats and reading answers
+
+**Backend.** `PATCH /threads/{id}` renames (blank titles rejected, spaces tidied, 120 characters at most) and `DELETE /threads/{id}` deletes. Both return 404 for an unknown thread and 403 for someone else's. The delete removes only the thread row: the database's `ON DELETE CASCADE` removes its messages and their citation snapshots.
+
+**Frontend.**
+
+- Sidebar: rename (pencil) and delete (bin) on each row, shown on hover and on keyboard focus. Delete asks first; deleting the open chat returns to the home screen. A loading skeleton, and "Try again" when the list fails to load.
+- Answers: **Copy** puts the answer on the clipboard with its markers and a numbered list of sources. **Try again** on a "No answer given" reply or a dropped connection asks the same question again (it is sent as a new message, so the earlier attempt stays in the history).
+- Source panel: previous and next buttons (and the left and right arrow keys), the highlighted figure is scrolled into view, and a link to the company's filings on SEC EDGAR. The link opens the filing list, not the single document, because we do not store EDGAR's company number.
+- Home screen: four example questions from the brief; clicking one creates a chat and asks it.
+- Input: focus returns after a reply, Enter sends, Shift+Enter adds a line, Escape stops a reply that is still coming in.
+- Errors: a server error (5xx) now reads "The server had a problem. Please try again in a moment."
+
+**Status.** 201 backend tests pass; `tsc`, lint and build pass. Not yet tried in a browser.
+
+---
+
+### Step 22 — Only Driftwood accounts, and the research shown live
+
+**Only Driftwood accounts.** The brief says analysts sign in with their Driftwood email. Supabase lets anyone sign up, so the backend is the gate:
+
+- `ALLOWED_EMAIL_DOMAINS` (required, comma-separated) and `ALLOWED_EMAILS` (optional, single addresses such as a developer's test account) in `config.py`. A deployment cannot start without a domain, so it can never be open by accident.
+- `get_current_user` returns 403 when the address is outside those domains, and also when the email is not confirmed. Without the second check, anyone could sign up as `someone@driftwood.com` without owning that mailbox.
+- `GET /me`: the sign-in form calls it right after signing in. On a 403 it signs the user out and shows the reason.
+- In Supabase, keep **Confirm email** turned on in production. Otherwise the confirmation check means nothing.
+- Config errors no longer print other settings' values (`hide_input_in_errors`), so a missing setting can't leak part of a key into a log.
+
+**The research shown live.** An answer takes 10 to 120 seconds, because it has to pass the grounding check before any text is sent. The chat used to show one spinner for that whole time.
+
+- The tools announce each step through `deps.report(...)`, for example "Searching AAPL FY2024: iPhone net sales" or "Reading the text around a passage: NVDA 10-K FY2025, Item 7". The grounding check announces itself too, and so does a revision when a claim fails.
+- The orchestrator runs the agent as a task and streams a `data-progress` part after each step. The part keeps the same `id`, and the AI SDK (7.0.173, `index.js` around line 7591) replaces a data part with the same type and id in place.
+- If the browser disconnects, the agent task is cancelled, so no tokens are spent on a reply nobody will read.
+- The steps are saved with the reply. Under an answer they fold into "How this was answered · N steps".
+
+**Check your understanding.**
+
+- *Why not stream the answer text as the model writes it?* The text only exists after the claims pass the check. Streaming the steps is honest about what is happening, and the text is still never shown unchecked.
+- *Why is the domain checked in the backend and not only in the form?* The form can be bypassed; every API call goes through `get_current_user`.
+
+**Status.** 217 backend tests pass. A live run showed the first step at 1.9 s and the text at 10.8 s. Not yet tried in a browser.
+
+---
+
+---
+
 ## Roadmap
 
 Steps still to be written into this guide, in build order (from [docs/architecture.md](docs/architecture.md)):
@@ -730,14 +1393,25 @@ Steps still to be written into this guide, in build order (from [docs/architectu
 | 3 | First migration (pgvector, documents, chunks, chats, citations) | Planned |
 | 4 | Supabase Auth in the frontend + token verification in FastAPI | Planned |
 | 5 | Shared frontend API client | Planned |
-| 6 | Chat endpoint with a stubbed reply | Planned |
-| 7 | Chat UI | Planned |
-| 8 | Ingestion: Markdown, chunking, embeddings | Planned |
-| 9 | Semantic search (pgvector) | Planned |
-| 10 | Keyword search + Reciprocal Rank Fusion | Planned |
-| 11 | PydanticAI document agent | Planned |
-| 12 | Citation validation and grounding | Planned |
-| 13 | Final UI: citations, source passages, errors | Planned |
+| 6 | Chat endpoint with a stubbed reply | **Written (Part 3, Step 7)** |
+| 7 | Chat UI | **Written (Part 3, Step 8)** |
+| 8 | Ingestion: Markdown, chunking, embeddings | **Written (Part 4, Step 9)** |
+| 9 | Semantic search (pgvector) | **Written (Part 4, Step 10)** |
+| 10 | Keyword search + Reciprocal Rank Fusion | **Written (Part 4, Step 10)** |
+| 11 | PydanticAI document agent: tools | **Written (Part 5, Step 11)** |
+| 11 | PydanticAI document agent: agent, grounding retry, usage caps | **Written (Part 5, Step 12)** |
+| 11 | Chat turn runs the agent and streams its sources | **Written (Part 5, Step 13)** |
+| 11 | Agent wired into the app (lifespan, dependencies, Windows event loop) | **Written (Part 5, Step 15)** |
+| 11 | Live run of the client brief questions, results in `docs/live_verification.md` | **Written (Part 5, Step 16)** |
+| 11 | Short source ids and format enforced in code | **Written (Part 5, Step 17)** |
+| 11 | The program numbers the markers; a vague question is asked back | **Written (Part 5, Step 18); about 7 to 10 of 10 brief questions answered, open items in the results doc** |
+| 11 | Document agent: deps, outputs, model, instructions | Built (steps 1 to 3 of the agent work); not yet written up |
+| 12 | Citation validation and grounding | Validator built; sources streamed and saved (**Part 5, Step 14**) |
+| 13 | Final UI: citations, source passages, errors | **Written (Part 6, Step 19); needs a manual browser check** |
+| 13 | Markers placed by the program, next to each figure | **Written (Part 6, Step 20); live refusal rate to re-measure** |
+| 13 | Chat management, copy and retry, source panel polish, loading and error states | **Written (Part 6, Step 21); needs a manual browser check** |
+| 4 | Only Driftwood accounts (allowed domains + confirmed email) | **Written (Part 6, Step 22)** |
+| 13 | Research steps streamed live while answering | **Written (Part 6, Step 22); needs a manual browser check** |
 | — | Evaluation set, then deploy on Railway | Planned |
 
 ---

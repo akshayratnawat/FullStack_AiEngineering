@@ -12,7 +12,7 @@ dependencies = [
     "pydantic==2.14.3",
     "pydantic-ai==2.66.0",
     "pydantic-settings==2.16.2",
-    "sqlalchemy==2.1.8",
+    "sqlalchemy[asyncio]==2.1.8",
     "structlog==26.1.0",
     "supabase==2.34.1",
     "uvicorn==0.54.0",
@@ -36,6 +36,7 @@ exclude-newer = "7 days"
 
 [dependency-groups]
 dev = [
+    "docling==2.149.0",
     "ipykernel==7.4.0",
     "pytest==9.2.0",
     "ruff==0.17.4",

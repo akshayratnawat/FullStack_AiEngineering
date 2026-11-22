@@ -158,7 +158,7 @@ Goal: analysts can verify every claim in one click — this is what makes the pr
 - [x] Empty states (no threads, no corpus match)
 - [x] Error states (auth expired, retrieval failure, grounding failure, network/CORS)
 - [x] Loading/streaming status during assistant run
-- [x] Verify: click a citation → see the exact passage from the filing
+- [ ] Verify: click a citation → see the exact passage from the filing (built; needs a manual check in the browser)
 
 ---
 
@@ -172,7 +172,7 @@ Goal: 5 senior analysts can use it for a week and report ≥3 hours saved per an
 - [ ] Confirm chat history persists across sessions
 - [ ] Confirm ~40-user scale assumptions (no hardcoded single-user shortcuts)
 - [ ] Basic structured logging on backend (`structlog`) for debugging failed turns
-- [ ] Review latency: streaming starts within a few seconds for typical queries
+- [ ] Review latency: streaming starts within a few seconds for typical queries (research steps now stream from about 2 s; the answer text still waits for the grounding check)
 
 ---
 
